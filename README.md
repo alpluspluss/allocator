@@ -7,7 +7,7 @@ It allocates memory... efficiently™
 It's just a header file. That's it. No really:
 
 ```c++
-#include "justalloc.hpp"
+#include "jalloc.hpp"
 ```
 Done. You now have:
 
@@ -53,5 +53,5 @@ Large blocks: [Header(8B)][Data(>256B)]
 MIT. See more here `LICENSE.md`.
 
 ---
-*Remember: It's Just an Allocator™ - Any resemblance to a sophisticated memory management system is purely coincidental.*
+**Remember: It's Just an Allocator™ - Any resemblance to a sophisticated memory management system is purely coincidental.**
 ---

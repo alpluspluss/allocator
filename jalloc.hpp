@@ -1,69 +1,145 @@
+//
+// Just an Allocator™
+// Author: alpluspluss 10/22/2024 00:27 AM
+// License: MIT
+//
+
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <new>
-#include <thread>
+
+#if defined(__x86_64__)
+    #include <immintrin.h>
+    #include <emmintrin.h>
+    #include <xmmintrin.h>
+
+    #ifdef _MSC_VER
+        #include <intrin.h>
+    #endif
+
+    #define STREAM_STORE_64(addr, val) _mm_stream_si64((__int64*)(addr), val)
+    #define CPU_PAUSE() _mm_pause()
+    #define CUSTOM_PREFETCH(addr) _mm_prefetch(reinterpret_cast<const char*>(addr), _MM_HINT_T0)
+
+#elif defined(__arm__) || defined(__aarch64__)
+    #include <arm_neon.h>
+    #ifdef __clang__
+        #include <arm_acle.h>
+    #endif
+
+    #define STREAM_STORE_64(addr, val) *((int64_t*)(addr)) = val
+    #define CPU_PAUSE() __yield()
+    #if defined(__clang__) && (defined(__aarch64__) || defined(__arm64__))
+        #define CUSTOM_PREFETCH(addr) __pld(reinterpret_cast<const char*>(addr))
+    #else
+        #define CUSTOM_PREFETCH(addr) ((void)0)
+    #endif
+
+#else
+    #define STREAM_STORE_64(addr, val) *((int64_t*)(addr)) = val
+    #define CPU_PAUSE() ((void)0)
+    #define CUSTOM_PREFETCH(addr) ((void)0)
+#endif
 
 #ifdef _WIN32
     #include <malloc.h>
     #include <windows.h>
-#else
-    #include <sched.h>
-    #include <unistd.h>
-    #include <sys/mman.h>
-#endif
 
-#ifdef __x86_64__
-    #include <immintrin.h>
-#else
-    #define _mm_pause() ((void)0)
-#endif
-
-#if defined(__GNUC__) || defined(__clang__)
-    #define LIKELY(x) __builtin_expect(!!(x), 1)
-    #define UNLIKELY(x) __builtin_expect(!!(x), 0)
-#else
-    #define LIKELY(x) (x)
-    #define UNLIKELY(x) (x)
-#endif
-
-#ifdef _WIN32
     #define MAP_MEMORY(size) \
         VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
     #define UNMAP_MEMORY(ptr, size) VirtualFree(ptr, 0, MEM_RELEASE)
     #define MAP_FAILED nullptr
+
+#elif defined(__APPLE__)
+    #include <mach/mach.h>
+    #include <sys/mman.h>
+
+    #define MAP_MEMORY(size) \
+        mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
+    #define UNMAP_MEMORY(ptr, size) munmap(ptr, size)
+
 #else
+    #include <sched.h>
+    #include <unistd.h>
+    #include <sys/mman.h>
+
     #define MAP_MEMORY(size) \
         mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
     #define UNMAP_MEMORY(ptr, size) munmap(ptr, size)
 #endif
 
-#ifdef __x86_64__
-    #include <emmintrin.h>
-    #define STREAM_STORE_64(addr, val) _mm_stream_si64((__int64*)(addr), val)
-#else
-    #define STREAM_STORE_64(addr, val) *((int64_t*)(addr)) = val
-#endif
-
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__GNUC__) || defined(__clang__)
+    #define LIKELY(x) __builtin_expect(!!(x), 1)
+    #define UNLIKELY(x) __builtin_expect(!!(x), 0)
     #define ALWAYS_INLINE [[gnu::always_inline]] inline
+
+    #if defined(__clang__)
+        #define HAVE_BUILTIN_ASSUME(x) __builtin_assume(x)
+        #define HAVE_BUILTIN_ASSUME_ALIGNED(x, a) __builtin_assume_aligned(x, a)
+        #define NO_SANITIZE_ADDRESS __attribute__((no_sanitize("address")))
+    #else
+        #define HAVE_BUILTIN_ASSUME(x) ((void)0)
+        #define HAVE_BUILTIN_ASSUME_ALIGNED(x, a) (x)
+        #define NO_SANITIZE_ADDRESS
+    #endif
+
 #elif defined(_MSC_VER)
+    #define LIKELY(x) (x)
+    #define UNLIKELY(x) (x)
     #define ALWAYS_INLINE __forceinline
+    #define HAVE_BUILTIN_ASSUME(x) ((void)0)
+    #define HAVE_BUILTIN_ASSUME_ALIGNED(x, a) (x)
+    #define NO_SANITIZE_ADDRESS
+    #define CUSTOM_PREFETCH(addr) ((void)0)
+
 #else
+    #define LIKELY(x) (x)
+    #define UNLIKELY(x) (x)
     #define ALWAYS_INLINE inline
+    #define HAVE_BUILTIN_ASSUME(x) ((void)0)
+    #define HAVE_BUILTIN_ASSUME_ALIGNED(x, a) (x)
+    #define NO_SANITIZE_ADDRESS
+    #define CUSTOM_PREFETCH(addr) ((void)0)
 #endif
 
 static constexpr size_t CACHE_LINE_SIZE = 64;
-static constexpr size_t PAGE_SIZE = 4096;
 static constexpr size_t TINY_LARGE_THRESHOLD = 64;
 static constexpr size_t SMALL_LARGE_THRESHOLD = 256;
 static constexpr size_t ALIGNMENT = CACHE_LINE_SIZE;
+static constexpr size_t PG_SIZE = 4096;
 static constexpr size_t LARGE_THRESHOLD = 1024 * 1024;
 static constexpr size_t CACHE_SIZE = 32;
 static constexpr size_t SIZE_CLASSES = 32;
+
+struct size_class
+{
+    uint16_t size;
+    uint16_t slot_size;
+    uint16_t blocks;
+    uint16_t slack;
+};
+
+constexpr std::array<size_class, 32> size_classes = []
+{
+    std::array<size_class, 32> classes{};
+    for (size_t i = 0; i < 32; ++i)
+    {
+        const size_t size = 1ULL << (i + 3);
+        const size_t slot = size + ALIGNMENT - 1 & ~(ALIGNMENT - 1);
+        classes[i] = {
+            static_cast<uint16_t>(size),
+            static_cast<uint16_t>(slot),
+            static_cast<uint16_t>(PG_SIZE / slot),
+            static_cast<uint16_t>(slot - size)
+        };
+    }
+    return classes;
+}();
 
 struct thread_cache_t
 {
@@ -106,43 +182,88 @@ struct thread_cache_t
     void clear() noexcept
     {
         for (auto&[blocks, count] : caches)
-        {
             count = 0;
-        }
     }
 };
 
+ALWAYS_INLINE
+static void prefetch_for_read(const void* addr) noexcept
+{
+    CUSTOM_PREFETCH(addr);
+}
+
+template<size_t stride = 64>
+ALWAYS_INLINE
+static void prefetch_range(const void* addr, const size_t size) noexcept
+{
+    auto ptr = static_cast<const char*>(addr);
+
+    for (const char* end = ptr + size; ptr < end; ptr += stride)
+        CUSTOM_PREFETCH(ptr);
+}
+
+template<typename T>
+ALWAYS_INLINE
+static void stream_store(void* dst, const T& value) noexcept
+{
+    STREAM_STORE_64(dst, static_cast<int64_t>(value));
+}
+
+#if defined(__x86_64__)
+    static ALWAYS_INLINE size_t count_trailing_zeros(uint64_t x)
+    {
+        #ifdef _MSC_VER
+            return _tzcnt_u64(x);
+        #else
+             return __builtin_ctzll(x);
+        #endif
+    }
+
+    static ALWAYS_INLINE void memory_fence()
+    {
+    _mm_mfence();
+    }
+
+    static ALWAYS_INLINE void prefetch(const void* addr)
+    {
+    _mm_prefetch(static_cast<const char*>(addr), _MM_HINT_T0);
+    }
+#elif defined(__arm__) || defined(__aarch64__)
+    ALWAYS_INLINE
+    static size_t count_trailing_zeros(const uint64_t x)
+    {
+        return __builtin_ctzll(x);
+    }
+    ALWAYS_INLINE
+    static void memory_fence()
+    {
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+    }
+    ALWAYS_INLINE
+    static void prefetch(const void* addr)
+    {
+        prefetch_for_read(addr);
+    }
+#else
+    static ALWAYS_INLINE size_t count_trailing_zeros(uint64_t x)
+    {
+        return __builtin_ctzll(x);
+    }
+
+    static ALWAYS_INLINE void memory_fence()
+    {
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+    }
+
+    static ALWAYS_INLINE void prefetch(const void*) {}
+#endif
+
 class Allocator
 {
-    struct size_class
-    {
-        uint16_t size;
-        uint16_t slot_size;
-        uint16_t blocks;
-        uint16_t slack;
-    };
-
-    static constexpr std::array<size_class, 32> size_classes = []
-    {
-        std::array<size_class, 32> classes{};
-        for (size_t i = 0; i < 32; ++i)
-        {
-            const size_t size = i + 1 << 3;
-            const size_t slot = size + ALIGNMENT - 1 & ~(ALIGNMENT - 1);
-            classes[i] = {
-                static_cast<uint16_t>(size),
-                static_cast<uint16_t>(slot),
-                static_cast<uint16_t>(PAGE_SIZE / slot),
-                static_cast<uint16_t>(slot - size)
-            };
-        }
-        return classes;
-    }();
-
     struct bitmap
     {
         static constexpr size_t bits_per_word = 64;
-        static constexpr size_t words_per_bitmap = PAGE_SIZE / (CACHE_LINE_SIZE * 8);
+        static constexpr size_t words_per_bitmap = PG_SIZE / (CACHE_LINE_SIZE * 8);
 
         alignas(CACHE_LINE_SIZE) std::atomic<uint64_t> words[words_per_bitmap];
 
@@ -157,20 +278,20 @@ class Allocator
         {
             for (size_t i = 0; i < words_per_bitmap; ++i)
             {
+                if (i + 1 < words_per_bitmap)
+                    prefetch(&words[i + 1]);
+
                 uint64_t expected = words[i].load(std::memory_order_relaxed);
                 while (expected != 0)
                 {
-                    #ifdef _MSC_VER
-                        const size_t bit = _tzcnt_u64(expected);
-                    #else
-                        const size_t bit = __builtin_ctzll(expected);
-                    #endif
+                    const size_t bit = count_trailing_zeros(expected);
 
-                        if (const uint64_t desired = expected & ~(1ULL << bit); words[i].compare_exchange_weak(
+                    if (const uint64_t desired = expected & ~(1ULL << bit); words[i].compare_exchange_weak(
                         expected, desired,
                         std::memory_order_acquire,
                         std::memory_order_relaxed))
                     {
+                        memory_fence();
                         return i * bits_per_word + bit;
                     }
                 }
@@ -183,14 +304,20 @@ class Allocator
         {
             const size_t word_idx = index / bits_per_word;
             const size_t bit_idx = index % bits_per_word;
+            prefetch(&words[word_idx]);
+            memory_fence();
             words[word_idx].fetch_or(1ULL << bit_idx, std::memory_order_release);
+            memory_fence();
         }
 
+        ALWAYS_INLINE
         bool is_completely_free() const noexcept
         {
-            for (const auto& word : words)
+            for (size_t i = 0; i < words_per_bitmap; ++i)
             {
-                if (word.load(std::memory_order_relaxed) != ~0ULL)
+                if (i + 1 < words_per_bitmap)
+                    prefetch(&words[i + 1]);
+                if (words[i].load(std::memory_order_relaxed) != ~0ULL)
                     return false;
             }
             return true;
@@ -249,10 +376,10 @@ class Allocator
         }
     };
 
-    struct alignas(PAGE_SIZE) pool
+    struct alignas(PG_SIZE) pool
     {
         bitmap bitmap;
-        uint8_t memory[PAGE_SIZE - sizeof(bitmap)]{};
+        uint8_t memory[PG_SIZE - sizeof(bitmap)]{};
 
         ALWAYS_INLINE
         void* allocate(const size_class& sc) noexcept
@@ -282,10 +409,10 @@ class Allocator
     {
         static constexpr size_t num_tiny_classes = 8;
 
-        struct alignas(PAGE_SIZE) tiny_pool
+        struct alignas(PG_SIZE) tiny_pool
         {
             bitmap bitmap;
-            uint8_t memory[PAGE_SIZE - sizeof(bitmap)]{};
+            uint8_t memory[PG_SIZE - sizeof(bitmap)]{};
 
             ALWAYS_INLINE
             void* allocate_tiny(const uint8_t size_class) noexcept
@@ -293,7 +420,7 @@ class Allocator
                 if (const size_t index = bitmap.find_free_block();
                     index != ~static_cast<size_t>(0))
                 {
-                    return memory + index * (size_class + 1 << 3);
+                    return memory + index * ((size_class + 1) << 3);
                 }
                 return nullptr;
             }
@@ -302,7 +429,7 @@ class Allocator
             void deallocate_tiny(void* ptr, const uint8_t size_class) noexcept
             {
                 const size_t offset = static_cast<uint8_t*>(ptr) - memory;
-                bitmap.mark_free(offset / (size_class + 1 << 3));
+                bitmap.mark_free(offset / ((size_class + 1) << 3));
             }
         };
     };
@@ -338,7 +465,7 @@ class Allocator
 
             if (pool_count[size_class] < MAX_POOLS)
             {
-                auto* new_pool = new (std::align_val_t{PAGE_SIZE}) pool();
+                auto* new_pool = new (std::align_val_t{PG_SIZE}) pool();
 
                 auto&[p, used_blocks] = pools[size_class][pool_count[size_class]];
                 p = new_pool;
@@ -365,7 +492,7 @@ class Allocator
                 auto& entry = pools[size_class][i];
                 const auto* pool_start = reinterpret_cast<const char*>(entry.p);
 
-                if (const auto* pool_end = pool_start + PAGE_SIZE; ptr >= pool_start && ptr < pool_end)
+                if (const auto* pool_end = pool_start + PG_SIZE; ptr >= pool_start && ptr < pool_end)
                 {
                     entry.p->deallocate(ptr, sc);
                     if (--entry.used_blocks == 0)
@@ -396,11 +523,13 @@ class Allocator
     ALWAYS_INLINE
     static void* allocate_tiny(const size_t size) noexcept
     {
-        const uint8_t size_class = size - 1 >> 3;
+        const uint8_t size_class = (size - 1) >> 3;
 
-        if (auto* tiny_pool = tiny_pools_[size_class]; LIKELY(tiny_pool != nullptr)) {
-            if (void* ptr = tiny_pool->allocate_tiny(size_class); LIKELY(ptr)) {
-                STREAM_STORE_64(ptr,
+        if (auto* tiny_pool = tiny_pools_[size_class]; LIKELY(tiny_pool != nullptr))
+        {
+            if (void* ptr = tiny_pool->allocate_tiny(size_class); LIKELY(ptr))
+            {
+                stream_store(ptr,
                     static_cast<uint64_t>(size) & block_header::size_mask |
                     static_cast<uint64_t>(size_class) << 48);
                 return static_cast<char*>(ptr) + sizeof(block_header);
@@ -412,7 +541,7 @@ class Allocator
 
         if (!tiny_pools_[size_class])
         {
-            tiny_pools_[size_class] = new (std::align_val_t{PAGE_SIZE})
+            tiny_pools_[size_class] = new (std::align_val_t{PG_SIZE})
                 tiny_block_manager::tiny_pool();
             return allocate_tiny(size);
         }
@@ -423,8 +552,29 @@ class Allocator
     ALWAYS_INLINE
     static void* allocate_small(const size_t size) noexcept
     {
-        const uint8_t size_class = size - 1 >> 3;
+        const uint8_t size_class = (size - 1) >> 3;
 
+        if (void* cached = thread_cache_.get(size_class))
+        {
+            auto* header = reinterpret_cast<block_header*>(
+                static_cast<char*>(cached) - sizeof(block_header));
+            header->set_free(false);
+            return cached;
+        }
+
+        if (void* ptr = pool_manager_.allocate(size_class); LIKELY(ptr))
+        {
+            auto* header = new (ptr) block_header();
+            header->encode(size, size_class, false);
+            return static_cast<char*>(ptr) + sizeof(block_header);
+        }
+
+        return nullptr;
+    }
+
+    ALWAYS_INLINE
+    static void* allocate_medium(const size_t size, const uint8_t size_class) noexcept
+    {
         if (void* cached = thread_cache_.get(size_class))
         {
             auto* header = reinterpret_cast<block_header*>(
@@ -447,18 +597,16 @@ class Allocator
     static void* allocate_large(const size_t size) noexcept
     {
         const size_t total_size = size + sizeof(block_header);
-        const size_t aligned_size = 1ULL << 64 - __builtin_clzll(total_size - 1);
+        const size_t aligned_size = 1ULL << (64 - __builtin_clzll(total_size - 1));
 
-        void* ptr = size >= LARGE_THRESHOLD
-            ? MAP_MEMORY(aligned_size)
-            : aligned_alloc(PAGE_SIZE, aligned_size);
+        void* ptr = MAP_MEMORY(aligned_size);
 
         if (UNLIKELY(!ptr))
             return nullptr;
 
         auto* header = new (ptr) block_header();
         header->encode(size, 255, false);
-        header->set_memory_mapped(size >= LARGE_THRESHOLD);
+        header->set_memory_mapped(true);
         return static_cast<char*>(ptr) + sizeof(block_header);
     }
 
@@ -474,6 +622,12 @@ public:
 
         if (size <= SMALL_LARGE_THRESHOLD)
             return allocate_small(size);
+
+        if (size < LARGE_THRESHOLD)
+        {
+            const size_t size_class = 31 - __builtin_clz(size - 1);
+            return allocate_medium(size, size_class);
+        }
 
         return allocate_large(size);
     }
@@ -516,7 +670,7 @@ public:
             if (header->is_memory_mapped())
             {
                 const size_t total_size = header->size() + sizeof(block_header);
-                const size_t aligned_size = total_size + PAGE_SIZE - 1 & ~(PAGE_SIZE - 1);
+                const size_t aligned_size = total_size + PG_SIZE - 1 & ~(PG_SIZE - 1);
                 UNMAP_MEMORY(block, aligned_size);
             }
             else
@@ -538,6 +692,184 @@ public:
         void* block = static_cast<char*>(ptr) - sizeof(block_header);
         pool_manager_.deallocate(block, size_class);
         header->set_free(true);
+    }
+
+    ALWAYS_INLINE NO_SANITIZE_ADDRESS
+    static void* reallocate(void* ptr, const size_t new_size) noexcept
+    {
+        if (UNLIKELY(!ptr))
+            return allocate(new_size);
+
+        if (UNLIKELY(!block_header::is_aligned(ptr)))
+            return nullptr;
+
+        if (UNLIKELY(new_size == 0))
+        {
+            deallocate(ptr);
+            return nullptr;
+        }
+
+        const auto* header = reinterpret_cast<block_header*>(
+            static_cast<char*>(ptr) - sizeof(block_header));
+
+        if (UNLIKELY(!header))
+            return nullptr;
+
+        const size_t old_size = header->size();
+        const uint8_t old_class = header->size_class();
+
+        #if defined(__clang__)
+            HAVE_BUILTIN_ASSUME(old_class <= SIZE_CLASSES);
+        #endif
+
+        if (old_class < tiny_block_manager::num_tiny_classes)
+        {
+            if (const size_t max_tiny_size = (old_class + 1) << 3; new_size <= max_tiny_size)
+                return ptr;
+        }
+        else if (old_class < SIZE_CLASSES)
+        {
+            if (const size_t max_size = size_classes[old_class].size; new_size <= max_size)
+                return ptr;
+        }
+
+        if (UNLIKELY(header->is_memory_mapped()))
+        {
+            #ifdef __linux__
+                void* block = static_cast<char*>(ptr) - sizeof(block_header);
+                const size_t new_total = new_size + sizeof(block_header);
+                void* new_block = mremap(block, old_total, new_total, MREMAP_MAYMOVE);
+                if (new_block != MAP_FAILED)
+                {
+                    auto* new_header = reinterpret_cast<block_header*>(new_block);
+                    new_header->encode(new_size, 255, false);
+                    new_header->set_memory_mapped(true);
+                    return static_cast<char*>(new_block) + sizeof(block_header);
+                }
+            #endif
+        }
+
+        void* new_ptr = allocate(new_size);
+        if (UNLIKELY(!new_ptr))
+            return nullptr;
+
+        if (const size_t copy_size = old_size < new_size ? old_size : new_size; copy_size <= 32)
+        {
+            std::memcpy(new_ptr, ptr, copy_size);
+        }
+        else if (copy_size >= 4096)
+        {
+            prefetch_range(ptr, copy_size);
+            prefetch_range(new_ptr, copy_size);
+
+            const auto dst = static_cast<char*>(new_ptr);
+            const auto src = static_cast<const char*>(ptr);
+
+            for (size_t i = 0; i < copy_size; i += 8)
+                stream_store(dst + i,
+                    *reinterpret_cast<const int64_t*>(src + i));
+            memory_fence();
+        }
+        else
+        {
+            #if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
+                #if __GLIBC_PREREQ(2, 14)
+                    __memcpy_chk(new_ptr, ptr, copy_size, copy_size);
+                #else
+                    std::memcpy(new_ptr, ptr, copy_size);
+                #endif
+            #else
+                std::memcpy(new_ptr, ptr, copy_size);
+            #endif
+        }
+
+        deallocate(ptr);
+        return new_ptr;
+    }
+
+    ALWAYS_INLINE NO_SANITIZE_ADDRESS
+    static void* calloc(const size_t num, const size_t size) noexcept
+    {
+        if (UNLIKELY(num == 0 || size == 0))
+            return nullptr;
+
+        if (UNLIKELY(num > SIZE_MAX / size))
+            return nullptr;
+
+        size_t total_size = num * size;
+        void* ptr = allocate(total_size);
+
+        if (UNLIKELY(!ptr))
+            return nullptr;
+
+        if (total_size <= 32)
+        {
+            std::memset(ptr, 0, total_size);
+            return ptr;
+        }
+
+        #ifdef __linux__
+        if (total_size >= 4096)
+        {
+            char* page_aligned = reinterpret_cast<char*>(
+                (reinterpret_cast<uintptr_t>(ptr) + 4095) & ~4095ULL);
+            size_t prefix = page_aligned - static_cast<char*>(ptr);
+            size_t suffix = (total_size - prefix) & 4095;
+            size_t middle = total_size - prefix - suffix;
+
+            // Zero non-aligned prefix
+            if (prefix)
+            {
+                MemoryHelper::stream_store(ptr, 0LL);
+                prefix = (prefix + 7) & ~7ULL;
+                for (size_t i = 8; i < prefix; i += 8)
+                {
+                    MemoryHelper::stream_store(
+                        static_cast<char*>(ptr) + i, 0LL);
+                }
+            }
+
+            if (middle)
+            {
+                if (madvise(page_aligned, middle, MADV_DONTNEED) == 0)
+                {
+                    if (suffix)
+                    {
+                        char* suffix_ptr = page_aligned + middle;
+                        for (size_t i = 0; i < suffix; i += 8)
+                        {
+                            MemoryHelper::stream_store(suffix_ptr + i, 0LL);
+                        }
+                    }
+                    MemoryHelper::memory_fence();
+                    return ptr;
+                }
+            }
+        }
+        #endif
+
+        auto dst = static_cast<char*>(ptr);
+
+        if (const size_t align = reinterpret_cast<uintptr_t>(dst) & 7)
+        {
+            std::memset(dst, 0, align);
+            dst += align;
+            total_size -= align;
+        }
+
+        const size_t blocks = total_size >> 3;
+        for (size_t i = 0; i < blocks; ++i)
+        {
+            stream_store(dst + (i << 3), 0LL);
+        }
+
+        if (const size_t remain = total_size & 7)
+        {
+            std::memset(dst + (blocks << 3), 0, remain);
+        }
+
+        memory_fence();
+        return ptr;
     }
 
     ALWAYS_INLINE
