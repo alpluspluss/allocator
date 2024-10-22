@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.29)
 project(allocator)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 
 add_executable(allocator main.cpp
-        allocator.hpp)
+        jalloc.hpp)

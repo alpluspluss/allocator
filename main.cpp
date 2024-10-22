@@ -3,7 +3,7 @@
 #include <iostream>
 #include <vector>
 
-#include "allocator.hpp"
+#include "jalloc.hpp"
 
 void BENCH_MALLOC(const size_t num_allocations, const size_t block_size)
 {
