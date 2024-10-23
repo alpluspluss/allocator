@@ -1,6 +1,12 @@
 # TODO List
 
-- [ ] aarch64 platform optimization
-- [ ] size query API
-- [ ] alignment control API
-- [ ] reallocation API
+- [X] aarch64 platform optimization
+- [X] reallocation API
+- [X] zero-initialization API (calloc)
+- [ ] Fully safe for production use
+- [X] Windows platform support
+- [X] Linux platform support
+- [X] macOS platform support
+- [ ] Benchmarking
+- [ ] Documentation
+- [ ] Tests
