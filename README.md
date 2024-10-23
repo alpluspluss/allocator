@@ -17,13 +17,29 @@ Done. You now have:
 all in one header file.
 
 ## Usage
-`jalloc::allocate` and `jalloc::deallocate` to allocate and deallocate memory. 
-Extras: `jalloc::reallocate` and `jalloc::callocate` for reallocation and zero-initialization.
 
-## Platforms
-- Windows
-- Unix
-- x86_64 (for now)
+```c++
+#include "jalloc.hpp"
+
+int main()
+{
+    void* ptr = jalloc::allocate(64);   // Allocate 64 bytes
+    jalloc::deallocate(ptr);           // Deallocate 64 bytes
+
+    void* ptr2 = jalloc::reallocate(ptr, 128); // Resize to 128 bytes
+    jalloc::callocate(1, 64);                 // Allocate and zero 64 bytes
+}
+```
+
+## Supported Platform Status
+
+| Platform | Status                                     |
+|----------|--------------------------------------------|
+| Windows  | Not fully tested                           | 
+| Linux    | Not fully tested                           | 
+| macOS    | Not fully tested (Apple Silicon supported) |
+| x86_64   | SIMD not yet tested                        | 
+| aarch64  | Fully supported                            | 
 
 ## Technical Details
 For those who insist on knowing more:
@@ -40,25 +56,26 @@ Large blocks: [Header(8B)][Data(>256B)]
 - Atomic operations
 - Lock-free fast paths
 
-# Requirements
+## Requirements
 - C++17 or later
 - C++ Compiler
 
-# Performance
-- SIMD instructions on every architecture to perform bulk operations.
-- Bitmap-based block management.
-- Three-tiered allocation strategy.
+## Performance
 
-See the [bechmarks](benches/benchmark.md) for more details.
+- SIMD instructions on all architectures enable bulk memory operations.
+- Bitmap-based block management minimizes overhead.
+- Three-tiered allocation strategy optimizes for small, medium, and large allocations.
 
-# Current State
+See the [bechmarks](benches/benchmark.md) for performance data.
+
+## Current State
 Currently, the allocator is in the development phase. It is not recommended for production use as some platform-specific
 features are not yet fully tested and unsafe. Only ARM-based architecture is supported single-threaded.
 
-# Note
+## Note
 This is a work in progress. Please feel free to [contribute](.github/CONTRIBUTING.md).
 
-# License
+## License
 MIT. FYI, please see the [License](LICENSE).
 
 ---
