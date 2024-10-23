@@ -19,18 +19,23 @@
 #include <mutex>
 #include <new>
 
-#ifdef __cplusplus
-extern "C"
-{
-#endif
-    void* malloc(size_t size);
-    void free(void* ptr);
-    void* realloc(void* ptr, size_t new_size);
-    void* calloc(size_t num, size_t size);
-    void cleanup();
-#ifdef __cplusplus
-}
-#endif
+// extern "c"
+// {
+//     void* malloc();
+//     void free(void* ptr);
+// }
+// #ifdef __cplusplus
+// extern "C"
+// {
+// #endif
+//     void* allocate(size_t size);
+//     void deallocate(void* ptr);
+//     void* reallocate(void* ptr, size_t new_size);
+//     void* callocate(size_t num, size_t size);
+//     void cleanup();
+// #ifdef __cplusplus
+// }
+// #endif
 // archetecture-specific include header
 #if defined(__x86_64__)
     #include <immintrin.h>
@@ -1071,7 +1076,6 @@ public:
         }
         // cool thing I just learned
         // header is 100% not null if the ptr is aligned!
-        // needs to be 64 byte aligned consistently though
         const auto* header = reinterpret_cast<block_header*>(
             static_cast<char*>(ptr) - sizeof(block_header));
 
@@ -1336,59 +1340,59 @@ public:
     }
 };
 
-ALWAYS_INLINE
-void* malloc(const size_t size)
-{
-    return Jallocator::allocate(size);
-}
-
-ALWAYS_INLINE
-void free(void* ptr)
-{
-    Jallocator::deallocate(ptr);
-}
-
-ALWAYS_INLINE
-void* realloc(void* ptr, const size_t new_size)
-{
-    return Jallocator::reallocate(ptr, new_size);
-}
-
-ALWAYS_INLINE
-void* calloc(const size_t num, const size_t size)
-{
-    return Jallocator::callocate(num, size);
-}
-
-ALWAYS_INLINE
-void cleanup()
-{
-    Jallocator::cleanup();
-}
-
-ALWAYS_INLINE
-void* operator new(const size_t __sz)
-{
-    return Jallocator::allocate(__sz);
-}
-
-ALWAYS_INLINE
-void* operator new[](const size_t __sz)
-{
-    return Jallocator::allocate(__sz);
-}
-
-ALWAYS_INLINE
-void operator delete(void* __p) noexcept
-{
-    Jallocator::deallocate(__p);
-}
-
-ALWAYS_INLINE
-void operator delete[](void* __p) noexcept
-{
-    Jallocator::deallocate(__p);
-}
+// ALWAYS_INLINE
+// void* allocate(const size_t size)
+// {
+//     return Jallocator::allocate(size);
+// }
+//
+// ALWAYS_INLINE
+// void deallocate(void* ptr)
+// {
+//     Jallocator::deallocate(ptr);
+// }
+//
+// ALWAYS_INLINE
+// void* reallocate(void* ptr, const size_t new_size)
+// {
+//     return Jallocator::reallocate(ptr, new_size);
+// }
+//
+// ALWAYS_INLINE
+// void* callocate(const size_t num, const size_t size)
+// {
+//     return Jallocator::callocate(num, size);
+// }
+//
+// ALWAYS_INLINE
+// void cleanup()
+// {
+//     Jallocator::cleanup();
+// }
+//
+// ALWAYS_INLINE
+// void* operator new(const size_t __sz)
+// {
+//     return Jallocator::allocate(__sz);
+// }
+//
+// ALWAYS_INLINE
+// void* operator new[](const size_t __sz)
+// {
+//     return Jallocator::allocate(__sz);
+// }
+//
+// ALWAYS_INLINE
+// void operator delete(void* __p) noexcept
+// {
+//     Jallocator::deallocate(__p);
+// }
+//
+// ALWAYS_INLINE
+// void operator delete[](void* __p) noexcept
+// {
+//     Jallocator::deallocate(__p);
+// }
 
 thread_local thread_cache_t Jallocator::thread_cache_{};
 thread_local Jallocator::pool_manager Jallocator::pool_manager_{};

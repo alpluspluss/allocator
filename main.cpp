@@ -5,7 +5,7 @@
 #include "jalloc.hpp"
 
 constexpr size_t NUM_ITERATIONS = 1000000;
-constexpr size_t NUM_RUNS = 1;
+constexpr size_t NUM_RUNS = 10;
 
 struct AllocationSize
 {
@@ -57,20 +57,20 @@ BenchmarkResult bench_jallocator(size_t size, size_t iterations)
     return {alloc_time, dealloc_time, alloc_time + dealloc_time, iterations * 2};
 }
 
-BenchmarkResult bench_malloc(size_t size, size_t iterations)
+BenchmarkResult bench_malloc(size_t size, const size_t iterations)
 {
     std::vector<void*> ptrs;
     ptrs.reserve(iterations);
 
-    double alloc_time = measure_time_ms([&]()
+    const double alloc_time = measure_time_ms([&]()
     {
         for (size_t i = 0; i < iterations; ++i)
             ptrs.push_back(malloc(size));
     });
 
-    double dealloc_time = measure_time_ms([&]()
+    const double dealloc_time = measure_time_ms([&]()
     {
-        for (auto ptr : ptrs)
+        for (const auto ptr: ptrs)
             free(ptr);
     });
 
