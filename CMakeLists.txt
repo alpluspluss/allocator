@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.29)
 project(allocator)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -73,7 +73,8 @@ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} \
     -fsanitize=address,undefined \
 ")
 
-add_executable(allocator main.cpp jalloc.hpp)
+add_executable(allocator main.cpp jalloc.hpp
+        .dev-container/jalloc-dev.hpp)
 
 target_compile_features(allocator PRIVATE cxx_std_20)
 

@@ -21,25 +21,31 @@ all in one header file.
 ```c++
 #include "jalloc.hpp"
 
-int main()
+int main() 
 {
-    void* ptr = jalloc::allocate(64);   // Allocate 64 bytes
-    jalloc::deallocate(ptr);           // Deallocate 64 bytes
+    void* ptr = jalloc::allocate(64);        // Allocate 64 bytes
+    jalloc::deallocate(ptr);                 // Free memory
 
-    void* ptr2 = jalloc::reallocate(ptr, 128); // Resize to 128 bytes
-    jalloc::callocate(1, 64);                 // Allocate and zero 64 bytes
+    // Or with new/delete operators
+    int* arr = new int[100];
+    delete[] arr;
+
+    void* buf = jalloc::callocate(1, 64);    // Zero-initialized allocation
+    void* ptr2 = jalloc::reallocate(ptr, 128); // Resize allocation
+    
+    return 0;
 }
 ```
 
 ## Supported Platform Status
 
-| Platform | Status                                     |
-|----------|--------------------------------------------|
-| Windows  | Not fully tested                           | 
-| Linux    | Not fully tested                           | 
-| macOS    | Not fully tested (Apple Silicon supported) |
-| x86_64   | SIMD not yet tested                        | 
-| aarch64  | Fully supported                            | 
+| Platform | Architecture          | Status     |
+|----------|-----------------------|------------|
+| macOS    | Apple Silicon (ARM64) | Tested     |
+| macOS    | x86_64                | Not tested |
+| Linux    | x86_64                | Not tested |
+| Linux    | ARM64                 | Not tested |
+| Windows  | x86_64                | Not tested |
 
 ## Technical Details
 For those who insist on knowing more:

@@ -19,23 +19,6 @@
 #include <mutex>
 #include <new>
 
-extern "c"
-{
-    void* malloc();
-    void free(void* ptr);
-}
-#ifdef __cplusplus
-extern "C"
-{
-#endif
-    void* allocate(size_t size);
-    void deallocate(void* ptr);
-    void* reallocate(void* ptr, size_t new_size);
-    void* callocate(size_t num, size_t size);
-    void cleanup();
-#ifdef __cplusplus
-}
-#endif
 // archetecture-specific include header
 #if defined(__x86_64__)
     #include <immintrin.h>
@@ -892,7 +875,7 @@ class Jallocator
             if (void* ptr = tiny_pool->allocate_tiny(size_class); LIKELY(ptr))
             {
                 stream_store(ptr,
-                    static_cast<uint64_t>(size) & block_header::size_mask |
+                    (static_cast<uint64_t>(size) & block_header::size_mask) |
                     static_cast<uint64_t>(size_class) << 48);
                 return static_cast<char*>(ptr) + sizeof(block_header);
             }
@@ -1339,60 +1322,6 @@ public:
         }
     }
 };
-
-ALWAYS_INLINE
-void* allocate(const size_t size)
-{
-    return Jallocator::allocate(size);
-}
-
-ALWAYS_INLINE
-void deallocate(void* ptr)
-{
-    Jallocator::deallocate(ptr);
-}
-
-ALWAYS_INLINE
-void* reallocate(void* ptr, const size_t new_size)
-{
-    return Jallocator::reallocate(ptr, new_size);
-}
-
-ALWAYS_INLINE
-void* callocate(const size_t num, const size_t size)
-{
-    return Jallocator::callocate(num, size);
-}
-
-ALWAYS_INLINE
-void cleanup()
-{
-    Jallocator::cleanup();
-}
-
-ALWAYS_INLINE
-void* operator new(const size_t __sz)
-{
-    return Jallocator::allocate(__sz);
-}
-
-ALWAYS_INLINE
-void* operator new[](const size_t __sz)
-{
-    return Jallocator::allocate(__sz);
-}
-
-ALWAYS_INLINE
-void operator delete(void* __p) noexcept
-{
-    Jallocator::deallocate(__p);
-}
-
-ALWAYS_INLINE
-void operator delete[](void* __p) noexcept
-{
-    Jallocator::deallocate(__p);
-}
 
 thread_local thread_cache_t Jallocator::thread_cache_{};
 thread_local Jallocator::pool_manager Jallocator::pool_manager_{};
