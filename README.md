@@ -38,7 +38,6 @@ int main()
 ```
 
 ## Supported Platform Status
-
 | Platform | Architecture          | Status     |
 |----------|-----------------------|------------|
 | macOS    | Apple Silicon (ARM64) | Tested     |
@@ -46,6 +45,8 @@ int main()
 | Linux    | x86_64                | Not tested |
 | Linux    | ARM64                 | Not tested |
 | Windows  | x86_64                | Not tested |
+
+### Note: GNU and Clang will be only supported compilers.
 
 ## Technical Details
 For those who insist on knowing more:

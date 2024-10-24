@@ -1,14 +1,16 @@
-//
-// jalloc -> Just an Allocator™
-// Single header file memory allocator for C/C++.
+// jalloc.hpp - Just an Allocator™
+// A high-performance, thread-safe memory allocator for C/C++
 //
 // Features:
-// - Thread-safe & high-performance
-// - Supports tiny, small, medium, and large allocations
+// - Thread-safe & high-performance memory allocation
+// - Multi-tiered allocation strategy for different sizes
+// - SIMD-optimized memory operations
+// - Automatic memory coalescing and return-to-OS
 //
-// Author: alpluspluss 10/22/2024 00:27 AM
+// Version: 0.1.1-unsafe
+// Author: alpluspluss
+// Created: 10/22/2024
 // License: MIT
-//
 
 #pragma once
 
@@ -18,8 +20,9 @@
 #include <cstdint>
 #include <mutex>
 #include <new>
+#include <thread>
 
-// archetecture-specific include header
+// Architecture-specific SIMD support detection and configuration
 #if defined(__x86_64__)
     #include <immintrin.h>
     #include <emmintrin.h>
@@ -37,7 +40,11 @@
         #include <intrin.h>
     #endif
 
-    // CPU Feature Detection
+    // CPU Feature Detection functions
+    //--------------------------------------------------------------------------
+    // Detects availability of AVX2 and AVX-512 instructions at runtime
+    // Returns: true if the feature is available, false otherwise
+    //--------------------------------------------------------------------------
     #ifdef __GNUC__
         #include <cpuid.h>
         ALWAYS_INLINE static bool cpu_has_avx2()
@@ -69,20 +76,26 @@
         }
     #endif
 
-    // simd ops
+    //--------------------------------------------------------------------------
+    // SIMD Operation Definitions
+    // Provides unified interface for different SIMD instruction sets
+    //--------------------------------------------------------------------------
     #ifdef __AVX512F__
+        // AVX-512: 64-byte vector operations
         #define VECTOR_WIDTH 64
         #define STREAM_STORE_VECTOR(addr, val) _mm512_stream_si512((__m512i*)(addr), val)
         #define LOAD_VECTOR(addr) _mm512_loadu_si512((const __m512i*)(addr))
         #define STORE_VECTOR(addr, val) _mm512_storeu_si512((__m512i*)(addr), val)
         #define SET_ZERO_VECTOR() _mm512_setzero_si512()
     #elif defined(__AVX2__)
+        // AVX2: 32-byte vector operations
         #define VECTOR_WIDTH 32
         #define STREAM_STORE_VECTOR(addr, val) _mm256_stream_si256((__m256i*)(addr), val)
         #define LOAD_VECTOR(addr) _mm256_loadu_si256((const __m256i*)(addr))
         #define STORE_VECTOR(addr, val) _mm256_storeu_si256((__m256i*)(addr), val)
         #define SET_ZERO_VECTOR() _mm256_setzero_si256()
     #else
+        // SSE: 16-byte vector operations (fallback)
         #define VECTOR_WIDTH 16
         #define STREAM_STORE_VECTOR(addr, val) _mm_stream_si128((__m128i*)(addr), val)
         #define LOAD_VECTOR(addr) _mm_loadu_si128((const __m128i*)(addr))
@@ -90,7 +103,7 @@
         #define SET_ZERO_VECTOR() _mm_setzero_si128()
     #endif
 
-    // common ops
+    // Common operations available across all x86_64 platforms
     #define STREAM_STORE_64(addr, val) _mm_stream_si64((__int64*)(addr), val)
     #define CPU_PAUSE() _mm_pause()
     #define MEMORY_FENCE() _mm_sfence()
@@ -99,16 +112,17 @@
     #define PREFETCH_READ(addr) _mm_prefetch(reinterpret_cast<const char*>(addr), _MM_HINT_NTA)
 
 #elif defined(__arm__) || defined(__aarch64__)
+    // ARM/AArch64 SIMD support using NEON
     #include <arm_neon.h>
     #ifdef __clang__
         #include <arm_acle.h>
     #endif
 
-    // arm NEON vector width
+    // ARM NEON: 16-byte vector operations
     #define VECTOR_WIDTH 16
 
-    // NEON ops
     #if defined(__aarch64__)
+        // 64-bit ARM specific optimizations
         #define STREAM_STORE_VECTOR(addr, val) vst1q_u8((uint8_t*)(addr), val)
         #define LOAD_VECTOR(addr) vld1q_u8((const uint8_t*)(addr))
         #define STORE_VECTOR(addr, val) vst1q_u8((uint8_t*)(addr), val)
@@ -116,11 +130,12 @@
         #define STREAM_STORE_64(addr, val) vst1_u64((uint64_t*)(addr), vcreate_u64(val))
         #define MEMORY_FENCE() __dmb(SY)
 
-        // Prefetch w/ cache-level hints
+        // ARM-specific prefetch hints
         #define CUSTOM_PREFETCH(addr) __asm__ volatile("prfm pldl1keep, [%0]" : : "r" (addr))
         #define PREFETCH_WRITE(addr) __asm__ volatile("prfm pstl1keep, [%0]" : : "r" (addr))
         #define PREFETCH_READ(addr) __asm__ volatile("prfm pldl1strm, [%0]" : : "r" (addr))
     #else
+        // 32-bit ARM fallbacks
         #define STREAM_STORE_VECTOR(addr, val) vst1q_u8((uint8_t*)(addr), val)
         #define LOAD_VECTOR(addr) vld1q_u8((const uint8_t*)(addr))
         #define STORE_VECTOR(addr, val) vst1q_u8((uint8_t*)(addr), val)
@@ -135,7 +150,8 @@
     #define CPU_PAUSE() __yield()
 
 #else
-    // fallback for unsupported architectures
+    // Generic fallback for unsupported architectures
+    // Provides basic functionality without SIMD optimizations
     #define VECTOR_WIDTH 8
     #define STREAM_STORE_VECTOR(addr, val) *((int64_t*)(addr)) = val
     #define LOAD_VECTOR(addr) *((const int64_t*)(addr))
@@ -149,61 +165,29 @@
     #define PREFETCH_READ(addr) ((void)0)
 #endif
 
-// platform-specific memory mapping
-#ifdef _WIN32
-    #include <malloc.h>
-    #include <windows.h>
-
-    #define MAP_MEMORY(size) \
-    VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
-    #define UNMAP_MEMORY(ptr, size) VirtualFree(ptr, 0, MEM_RELEASE)
-#ifndef MAP_FAILED
-    #define MAP_FAILED nullptr
-#endif
-    #define ALIGNED_ALLOC(alignment, size) _aligned_malloc(size, alignment)
-    #define ALIGNED_FREE(ptr) _aligned_free(ptr)
-
-#elif defined(__APPLE__)
-    #include <mach/mach.h>
-    #include <sys/mman.h>
-
-    #define MAP_MEMORY(size) \
-        mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
-    #define UNMAP_MEMORY(ptr, size) munmap(ptr, size)
-    #define ALIGNED_ALLOC(alignment, size) aligned_alloc(alignment, size)
-    #define ALIGNED_FREE(ptr) free(ptr)
-
-#else
-    #include <sched.h>
-    #include <unistd.h>
-    #include <sys/mman.h>
-
-    #define MAP_MEMORY(size) \
-        mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
-    #define UNMAP_MEMORY(ptr, size) munmap(ptr, size)
-    #define ALIGNED_ALLOC(alignment, size) aligned_alloc(alignment, size)
-    #define ALIGNED_FREE(ptr) free(ptr)
-#endif
-
+// Compiler-specific optimizations and attributes
 #if defined(__GNUC__) || defined(__clang__)
+    // GCC/Clang specific optimizations
     #define LIKELY(x) __builtin_expect(!!(x), 1)
     #define UNLIKELY(x) __builtin_expect(!!(x), 0)
     #define ALWAYS_INLINE [[gnu::always_inline]] inline
     #define ALIGN_TO(x) __attribute__((aligned(x)))
 
     #if defined(__clang__)
+        // Clang-specific optimizations
         #define HAVE_BUILTIN_ASSUME(x) __builtin_assume(x)
         #define HAVE_BUILTIN_ASSUME_ALIGNED(x, a) __builtin_assume_aligned(x, a)
         #define NO_SANITIZE_ADDRESS __attribute__((no_sanitize("address")))
         #define VECTORIZE_LOOP _Pragma("clang loop vectorize(enable) interleave(enable)")
     #else
+        // GCC-specific fallbacks
         #define HAVE_BUILTIN_ASSUME(x) ((void)0)
         #define HAVE_BUILTIN_ASSUME_ALIGNED(x, a) (x)
         #define NO_SANITIZE_ADDRESS
         #define VECTORIZE_LOOP _Pragma("GCC ivdep")
     #endif
-
 #elif defined(_MSC_VER)
+    // MSVC specific optimizations
     #define LIKELY(x) (x)
     #define UNLIKELY(x) (x)
     #define ALWAYS_INLINE __forceinline
@@ -213,8 +197,8 @@
     #define NO_SANITIZE_ADDRESS
     #define VECTORIZE_LOOP
     #define CUSTOM_PREFETCH(addr) ((void)0)
-
 #else
+    // Generic fallbacks for other compilers
     #define LIKELY(x) (x)
     #define UNLIKELY(x) (x)
     #define ALWAYS_INLINE inline
@@ -226,14 +210,66 @@
     #define CUSTOM_PREFETCH(addr) ((void)0)
 #endif
 
+// Platform-specific memory management operations
+#ifdef _WIN32
+    #include <malloc.h>
+    #include <windows.h>
+    // Windows virtual memory management
+    #define MAP_MEMORY(size) \
+        VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
+    #define UNMAP_MEMORY(ptr, size) VirtualFree(ptr, 0, MEM_RELEASE)
+    #ifndef MAP_FAILED
+        #define MAP_FAILED nullptr
+    #endif
+    #define ALIGNED_ALLOC(alignment, size) _aligned_malloc(size, alignment)
+    #define ALIGNED_FREE(ptr) _aligned_free(ptr)
+#elif defined(__APPLE__)
+    // macOS memory management
+    #include <mach/mach.h>
+#include <sys/mman.h>
+
+    #define MAP_MEMORY(size) \
+        mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
+    #define UNMAP_MEMORY(ptr, size) munmap(ptr, size)
+    #define ALIGNED_ALLOC(alignment, size) aligned_alloc(alignment, size)
+    #define ALIGNED_FREE(ptr) free(ptr)
+
+#else
+    // POSIX-compliant systems (Linux, BSD, etc.)
+    #include <sched.h>
+    #include <unistd.h>
+    #include <sys/mman.h>
+
+    #define MAP_MEMORY(size) \
+        mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
+    #define UNMAP_MEMORY(ptr, size) munmap(ptr, size)
+    #define ALIGNED_ALLOC(alignment, size) aligned_alloc(alignment, size)
+    #define ALIGNED_FREE(ptr) free(ptr)
+#endif
+
+
+// Allocator constants
+// Hardware constants
 static constexpr size_t CACHE_LINE_SIZE = 64;
+static constexpr size_t PG_SIZE = 4096;
+
+// Block header
 static constexpr size_t TINY_LARGE_THRESHOLD = 64;
 static constexpr size_t SMALL_LARGE_THRESHOLD = 256;
 static constexpr size_t ALIGNMENT = CACHE_LINE_SIZE;
-static constexpr size_t PG_SIZE = 4096;
 static constexpr size_t LARGE_THRESHOLD = 1024 * 1024;
+
 static constexpr size_t CACHE_SIZE = 32;
 static constexpr size_t SIZE_CLASSES = 32;
+
+// Safety flags
+static constexpr uint64_t SIZE_MASK = 0x0000FFFFFFFFFFFF;
+static constexpr uint64_t CLASS_MASK = 0x00FF000000000000;
+static constexpr uint64_t MMAP_FLAG = 1ULL << 62;
+static constexpr uint64_t COALESCED_FLAG = 1ULL << 61;
+static constexpr uint64_t MAGIC_MASK = 0xF000000000000000;
+static constexpr uint64_t MAGIC_VALUE = 0xA000000000000000;
+static constexpr uint64_t THREAD_OWNER_MASK = 0xFFFF000000000000;
 
 struct size_class
 {
@@ -472,12 +508,12 @@ class Jallocator
 
     struct alignas(ALIGNMENT) block_header
     {
-        static constexpr uint64_t size_mask = 0x0000FFFFFFFFFFFF;
-        static constexpr uint64_t class_mask = 0x00FF000000000000;
-        static constexpr uint64_t flags_mask = 0xFF00000000000000;
-        static constexpr uint64_t mmap_flag = 1ULL << 62;
-        static constexpr uint64_t coalesced_flag = 1ULL << 61;
-
+        // Bit field layout:
+        // [63]    - Free flag
+        // [62]    - Memory mapped flag
+        // [61]    - Coalesced flag
+        // [56-48] - Size class
+        // [47-0]  - Block size
         uint64_t data;
         block_header* prev_physical;
         block_header* next_physical;
@@ -494,30 +530,37 @@ class Jallocator
         ALWAYS_INLINE
         void encode(const size_t size, const uint8_t size_class, const bool is_free) noexcept
         {
-            data = size & size_mask |
-                   static_cast<uint64_t>(size_class) << 48 |
-                   static_cast<uint64_t>(is_free) << 63;
+            data = (size & SIZE_MASK) |
+               (static_cast<uint64_t>(size_class) << 48) |
+               (static_cast<uint64_t>(is_free) << 63) |
+               MAGIC_VALUE;
+        }
+
+        ALWAYS_INLINE
+        bool is_valid() const noexcept
+        {
+            return (data & MAGIC_MASK) == MAGIC_VALUE;
         }
 
         ALWAYS_INLINE
         void set_free(const bool is_free) noexcept
         {
-            data = data & ~(1ULL << 63) | static_cast<uint64_t>(is_free) << 63;
+            data = (data & ~(1ULL << 63)) | static_cast<uint64_t>(is_free) << 63;
         }
 
         ALWAYS_INLINE
         void set_memory_mapped(const bool is_mmap) noexcept
         {
-            data = data & ~mmap_flag | static_cast<uint64_t>(is_mmap) << 62;
+            data = (data & ~MMAP_FLAG) | static_cast<uint64_t>(is_mmap) << 62;
         }
 
         size_t size() const noexcept
         {
-            return data & size_mask;
+            return data & SIZE_MASK;
         }
         uint8_t size_class() const noexcept
         {
-            return (data & class_mask) >> 48;
+            return (data & CLASS_MASK) >> 48;
         }
         bool is_free() const noexcept
         {
@@ -525,9 +568,16 @@ class Jallocator
         }
         bool is_memory_mapped() const noexcept
         {
-            return data & mmap_flag;
+            return data & MMAP_FLAG;
         }
 
+        // Check if the block is perfectly aligned to the cache line size (64B)
+        // and verify if the pointer is corrupted or not
+        // The performance trade-offs are worth it
+        // Please note in mind that this DOES NOT check
+        // 1. Perfectly-aligned corrupted pointers
+        // 2. Maliciously-aligned pointers
+        // 3.
         static bool is_aligned(const void* ptr) noexcept
         {
             return (reinterpret_cast<uintptr_t>(ptr) & ALIGNMENT - 1) == 0;
@@ -567,13 +617,13 @@ class Jallocator
         ALWAYS_INLINE
         void set_coalesced(const bool is_coalesced) noexcept
         {
-            data = data & ~coalesced_flag | (static_cast<uint64_t>(is_coalesced) << 61);
+            data = (data & ~COALESCED_FLAG) | (static_cast<uint64_t>(is_coalesced) << 61);
         }
 
         ALWAYS_INLINE
         bool is_coalesced() const noexcept
         {
-            return data & coalesced_flag;
+            return data & COALESCED_FLAG;
         }
     };
 
@@ -828,7 +878,12 @@ class Jallocator
         ALWAYS_INLINE
         void deallocate(void* ptr, const uint8_t size_class) noexcept
         {
+            if (UNLIKELY((reinterpret_cast<uintptr_t>(ptr) & ~(PG_SIZE-1)) == 0))
+                return;
+
             const auto& sc = size_classes[size_class];
+            if (UNLIKELY(size_class >= SIZE_CLASSES))
+                return;
 
             for (size_t i = 0; i < pool_count[size_class]; ++i)
             {
@@ -875,7 +930,7 @@ class Jallocator
             if (void* ptr = tiny_pool->allocate_tiny(size_class); LIKELY(ptr))
             {
                 stream_store(ptr,
-                    (static_cast<uint64_t>(size) & block_header::size_mask) |
+                    (static_cast<uint64_t>(size) & SIZE_MASK) |
                     static_cast<uint64_t>(size_class) << 48);
                 return static_cast<char*>(ptr) + sizeof(block_header);
             }
@@ -903,8 +958,13 @@ class Jallocator
         {
             auto* header = reinterpret_cast<block_header*>(
                 static_cast<char*>(cached) - sizeof(block_header));
-            header->set_free(false);
-            return cached;
+
+            if (LIKELY(header->is_valid()))
+            {
+                header->set_free(false);
+                return cached;
+            }
+            return nullptr;
         }
 
         if (void* ptr = pool_manager_.allocate(size_class); LIKELY(ptr))
@@ -959,7 +1019,7 @@ public:
     ALWAYS_INLINE
     static void* allocate(const size_t size) noexcept
     {
-        if (UNLIKELY(size == 0))
+        if (UNLIKELY(size == 0 || size > (1ULL << 47)))
             return nullptr;
 
         if (LIKELY(size <= TINY_LARGE_THRESHOLD))
@@ -988,7 +1048,15 @@ public:
         auto* header = reinterpret_cast<block_header*>(
             static_cast<char*>(ptr) - sizeof(block_header));
 
+        if (UNLIKELY(!header->is_valid()))
+            return;
+
+        if (UNLIKELY((reinterpret_cast<uintptr_t>(ptr) & ~(PG_SIZE-1)) == 0))
+            return;
+
         const uint8_t size_class = header->size_class();
+        if (UNLIKELY(size_class >= SIZE_CLASSES && size_class != 255))
+            return;
 
         if (size_class < tiny_block_manager::num_tiny_classes)
         {
@@ -1063,6 +1131,12 @@ public:
             static_cast<char*>(ptr) - sizeof(block_header));
 
         if (UNLIKELY(!header))
+            return nullptr;
+
+        if (UNLIKELY(!header->is_valid()))
+            return nullptr;
+
+        if (UNLIKELY(header->size() > (1ULL << 47)))
             return nullptr;
 
         const size_t old_size = header->size();
@@ -1323,8 +1397,48 @@ public:
     }
 };
 
+// Initialization
 thread_local thread_cache_t Jallocator::thread_cache_{};
 thread_local Jallocator::pool_manager Jallocator::pool_manager_{};
 thread_local std::array<Jallocator::tiny_block_manager::tiny_pool*,
                        Jallocator::tiny_block_manager::num_tiny_classes>
     Jallocator::tiny_pools_{};
+
+// C API
+#ifndef __cplusplus
+{
+    extern  "C"
+{
+
+}
+    ALWAYS_INLINE
+    void* malloc(const size_t size)
+    {
+        return Jallocator::allocate(size);
+    }
+
+    ALWAYS_INLINE
+    void free(void* ptr)
+    {
+        Jallocator::deallocate(ptr);
+    }
+
+    ALWAYS_INLINE
+    void* realloc(void* ptr, const size_t new_size)
+    {
+        return Jallocator::reallocate(ptr, new_size);
+    }
+
+    ALWAYS_INLINE
+    void* calloc(const size_t num, const size_t size)
+    {
+        return Jallocator::callocate(num, size);
+    }
+
+    ALWAYS_INLINE
+    void cleanup()
+    {
+        Jallocator::cleanup();
+    }
+}
+#endif
