@@ -13,7 +13,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ macos-latest, windows-latest ]
+        os: [ macos-latest, windows-latest, ubuntu-latest ]
         arch: [ x86_64, arm64 ]
 
     steps:
@@ -26,8 +26,8 @@ jobs:
           path: ~/.cache/clang
           restore-keys: |
             ${{ runner.os }}-clang-
-
           key: "${{ runner.os }}-clang-${{ hashFiles('**/CMakeLists.txt') }}"
+
       - name: Install Clang
         run: |
           if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
@@ -35,7 +35,7 @@ jobs:
             sudo apt-get install -y clang
           elif [ "${{ matrix.os }}" == "macos-latest" ]; then
             brew install llvm
-            echo "/usr/local/opt/llvm/bin" >> $GITHUB_PATH  # Make sure to add clang to the path
+            echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH  # Ensure the correct path for Clang
           elif [ "${{ matrix.os }}" == "windows-latest" ]; then
             choco install llvm
           fi
