@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CheckCXXCompilerFlag)
+include(CTest)  # Include CTest for testing
 
 function(add_compiler_flag flag)
     check_cxx_compiler_flag(${flag} FLAG_${flag})
@@ -30,40 +31,33 @@ if(APPLE)
     add_compiler_flag(-mcpu=apple-m1)
     add_compiler_flag(-mvsx)
     add_compiler_flag(-maltivec)
-endif()
 
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} \
-    -O3 \
-    -DNDEBUG \
-    -fomit-frame-pointer \
-    -flto=thin \
-    -fno-signed-zeros \
-    -fno-trapping-math \
-    -freciprocal-math \
-    -ffinite-math-only \
-    -fno-math-errno \
-    -fno-rtti \
-    -fno-exceptions \
-    -ffunction-sections \
-    -fdata-sections \
-")
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "AppleClang")
+elseif(UNIX)
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} \
-        -fvectorize \
-        -funroll-loops \
-        -fslp-vectorize \
-        -fslp-vectorize-aggressive \
-        -ffp-contract=fast \
-        -fmerge-all-constants \
+        -O3 \
+        -DNDEBUG \
+        -fomit-frame-pointer \
+        -flto=thin \
+        -fno-signed-zeros \
+        -fno-trapping-math \
+        -freciprocal-math \
+        -ffinite-math-only \
+        -fno-math-errno \
+        -fno-rtti \
+        -fno-exceptions \
+        -ffunction-sections \
+        -fdata-sections \
     ")
-endif()
+    add_compile_options(-march=native -mtune=native)
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} \
-        -Wl,-dead_strip \
-        -Wl,-dead_strip_dylibs \
-        -Wl,-x \
+elseif(WIN32)
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} \
+        /O3 \
+        /DNDEBUG \
+        /Ob2 \
+        /Oi \
+        /Gy \
+        /GL \
     ")
 endif()
 
@@ -73,8 +67,10 @@ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} \
     -fsanitize=address,undefined \
 ")
 
-add_executable(allocator main.cpp jalloc.hpp
-        .dev-container/jalloc-dev.hpp)
+add_executable(allocator tests/main.cpp jalloc.hpp
+        .dev-container/jalloc-dev.hpp
+        tests/testsuit.h
+)
 
 target_compile_features(allocator PRIVATE cxx_std_20)
 
@@ -103,8 +99,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     endif()
 endif()
 
-target_compile_options(allocator PRIVATE -march=native -mtune=native)
-
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_options(allocator PRIVATE
             -Rpass=loop-vectorize
@@ -112,3 +106,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
             -Rpass-analysis=loop-vectorize
     )
 endif()
+
+enable_testing()
+
+add_executable(jalloc-test tests/main.cpp jalloc.hpp)
+
+add_test(NAME jalloc_test COMMAND jalloc-test)

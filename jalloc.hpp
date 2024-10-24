@@ -1,3 +1,4 @@
+//
 // jalloc.hpp - Just an Allocator™
 // A high-performance, thread-safe memory allocator for C/C++
 //
@@ -7,7 +8,7 @@
 // - SIMD-optimized memory operations
 // - Automatic memory coalescing and return-to-OS
 //
-// Version: 0.1.2-unsafe
+// Version: 0.1.1-unsafe
 // Author: alpluspluss
 // Created: 10/22/2024
 // License: MIT
@@ -545,13 +546,13 @@ class Jallocator
         ALWAYS_INLINE
         void set_free(const bool is_free) noexcept
         {
-            data = data & ~(1ULL << 63) | static_cast<uint64_t>(is_free) << 63;
+            data = (data & ~(1ULL << 63)) | static_cast<uint64_t>(is_free) << 63;
         }
 
         ALWAYS_INLINE
         void set_memory_mapped(const bool is_mmap) noexcept
         {
-            data = data & ~MMAP_FLAG | static_cast<uint64_t>(is_mmap) << 62;
+            data = (data & ~MMAP_FLAG) | static_cast<uint64_t>(is_mmap) << 62;
         }
 
         size_t size() const noexcept
@@ -617,7 +618,7 @@ class Jallocator
         ALWAYS_INLINE
         void set_coalesced(const bool is_coalesced) noexcept
         {
-            data = data & ~COALESCED_FLAG | (static_cast<uint64_t>(is_coalesced) << 61);
+            data = (data & ~COALESCED_FLAG) | (static_cast<uint64_t>(is_coalesced) << 61);
         }
 
         ALWAYS_INLINE
@@ -1136,7 +1137,6 @@ public:
         if (UNLIKELY(!header->is_valid()))
             return nullptr;
 
-        // Add size validation
         if (UNLIKELY(header->size() > (1ULL << 47)))
             return nullptr;
 
@@ -1404,26 +1404,6 @@ thread_local Jallocator::pool_manager Jallocator::pool_manager_{};
 thread_local std::array<Jallocator::tiny_block_manager::tiny_pool*,
                        Jallocator::tiny_block_manager::num_tiny_classes>
     Jallocator::tiny_pools_{};
-
-inline void* operator new(const size_t __sz)
-{
-    return Jallocator::allocate(__sz);
-}
-
-inline void* operator new[](const size_t __sz)
-{
-    return Jallocator::allocate(__sz);
-}
-
-inline void operator delete(void* __p) noexcept
-{
-    Jallocator::deallocate(__p);
-}
-
-inline void operator delete[](void* __p) noexcept
-{
-    Jallocator::deallocate(__p);
-}
 
 // C API
 #ifndef __cplusplus
