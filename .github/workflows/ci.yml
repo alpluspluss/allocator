@@ -13,12 +13,32 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        os: [ macos-latest, windows-latest ]
         arch: [ x86_64, arm64 ]
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Cache Clang
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/clang
+          restore-keys: |
+            ${{ runner.os }}-clang-
+
+          key: "${{ runner.os }}-clang-${{ hashFiles('**/CMakeLists.txt') }}"
+      - name: Install Clang
+        run: |
+          if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
+            sudo apt-get update
+            sudo apt-get install -y clang
+          elif [ "${{ matrix.os }}" == "macos-latest" ]; then
+            brew install llvm
+            echo "/usr/local/opt/llvm/bin" >> $GITHUB_PATH  # Make sure to add clang to the path
+          elif [ "${{ matrix.os }}" == "windows-latest" ]; then
+            choco install llvm
+          fi
 
       - name: Set up CMake
         uses: jwlawson/actions-setup-cmake@v2
@@ -30,11 +50,11 @@ jobs:
           mkdir build
           cd build
           if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-march=native"
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_FLAGS="-march=native"
           elif [ "${{ matrix.os }}" == "macos-latest" ]; then
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-arch arm64 -mtune=native"
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_FLAGS="-arch arm64 -mtune=native"
           elif [ "${{ matrix.os }}" == "windows-latest" ]; then
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="/arch:AVX2"  # Example for AVX2 on Windows
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_FLAGS="/arch:AVX2"  # Example for AVX2 on Windows
           fi
 
       - name: Build
