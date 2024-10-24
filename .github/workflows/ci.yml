@@ -13,56 +13,80 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ macos-latest, windows-latest, ubuntu-latest ]
-        arch: [ x86_64, arm64 ]
+        os: [macos-latest, windows-latest, ubuntu-latest]
+        arch: [x86_64]
+        include:
+          - os: macos-latest
+            arch: arm64
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Cache Clang
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
-          path: ~/.cache/clang
+          path: |
+            ~/.cache/clang
+            ~/Library/Caches/Homebrew
+            ~/AppData/Local/Temp/chocolatey
+          key: ${{ runner.os }}-clang-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: |
             ${{ runner.os }}-clang-
-          key: "${{ runner.os }}-clang-${{ hashFiles('**/CMakeLists.txt') }}"
 
-      - name: Install Clang
+      - name: Install Clang (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
         run: |
-          if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
-            sudo apt-get update
-            sudo apt-get install -y clang
-          elif [ "${{ matrix.os }}" == "macos-latest" ]; then
-            brew install llvm
-            echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH  # Ensure the correct path for Clang
-          elif [ "${{ matrix.os }}" == "windows-latest" ]; then
-            choco install llvm
-          fi
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Install Clang (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+
+      - name: Install Clang (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install llvm
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
 
       - name: Set up CMake
         uses: jwlawson/actions-setup-cmake@v2
         with:
           cmake-version: '3.29.0'
 
-      - name: Configure Project
+      - name: Configure Project (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p build
+          cd build
+          if [ "${{ matrix.os }}" = "macos-latest" ] && [ "${{ matrix.arch }}" = "arm64" ]; then
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_CXX_COMPILER=clang++ \
+                    -DCMAKE_OSX_ARCHITECTURES=arm64
+          else
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_CXX_COMPILER=clang++
+          fi
+
+      - name: Configure Project (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
         run: |
           mkdir build
           cd build
-          if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_FLAGS="-march=native"
-          elif [ "${{ matrix.os }}" == "macos-latest" ]; then
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_FLAGS="-arch arm64 -mtune=native"
-          elif [ "${{ matrix.os }}" == "windows-latest" ]; then
-            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_FLAGS="/arch:AVX2"  # Example for AVX2 on Windows
-          fi
+          cmake .. -DCMAKE_BUILD_TYPE=Release ^
+                  -DCMAKE_CXX_COMPILER=clang++ ^
+                  -T ClangCL
 
       - name: Build
         run: |
-          cd build
-          cmake --build . --config Release
+          cmake --build build --config Release
 
       - name: Run Tests
         run: |
           cd build
-          ctest --output-on-failure
+          ctest --output-on-failure -C Release

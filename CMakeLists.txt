@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(CheckCXXCompilerFlag)
 include(CTest)
+enable_testing()
 
 function(add_compiler_flag flag)
     check_cxx_compiler_flag(${flag} FLAG_${flag})
@@ -67,22 +68,41 @@ elseif(WIN32)
         /Gy \
         /GL \
         /sdl \
+        /EHsc \
     ")
 endif()
 
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} \
-    -g3 \
-    -fno-omit-frame-pointer \
-    -fsanitize=address,undefined \
-")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} \
+        -g3 \
+        -fno-omit-frame-pointer \
+        -fsanitize=address,undefined \
+    ")
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined")
+    endif()
+endif()
 
-add_executable(allocator tests/main.cpp
-        jalloc.hpp
-        tests/testsuit.h
+add_library(jalloc INTERFACE)
+target_include_directories(jalloc INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(jalloc INTERFACE cxx_std_17)
+
+add_executable(jalloc_tests tests/main.cpp)
+target_link_libraries(jalloc_tests PRIVATE jalloc)
+target_compile_features(jalloc_tests PRIVATE cxx_std_17)
+
+add_test(
+        NAME jalloc_unit_tests
+        COMMAND jalloc_tests
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
-target_compile_features(allocator PRIVATE cxx_std_20)
+set_tests_properties(jalloc_unit_tests PROPERTIES
+        TIMEOUT 30
+        WILL_FAIL FALSE
+)
 
-enable_testing()
-add_executable(jalloc-test tests/main.cpp jalloc.hpp)
-add_test(NAME jalloc_test COMMAND jalloc-test)
+set_tests_properties(jalloc_unit_tests PROPERTIES LABELS "unit")
+
+set(CTEST_OUTPUT_ON_FAILURE ON)
+set(CTEST_TEST_TIMEOUT 120)
