@@ -7,7 +7,7 @@
 // - SIMD-optimized memory operations
 // - Automatic memory coalescing and return-to-OS
 //
-// Version: 0.1.1-unsafe
+// Version: 0.1.2-unsafe
 // Author: alpluspluss
 // Created: 10/22/2024
 // License: MIT
