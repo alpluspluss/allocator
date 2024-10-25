@@ -22,7 +22,6 @@
 #include <mutex>
 #include <new>
 
-// Architecture-specific SIMD support detection and configuration
 #if defined(__x86_64__)
     #include <immintrin.h>
     #include <emmintrin.h>
@@ -439,7 +438,7 @@ static bool is_base_aligned(const void *ptr) noexcept
 
 class Jallocator
 {
-      struct bitmap
+    struct bitmap
     {
         static constexpr size_t bits_per_word = 64;
         static constexpr size_t words_per_bitmap = PG_SIZE / (CACHE_LINE_SIZE * 8);
@@ -1103,17 +1102,17 @@ class Jallocator
     static void* allocate_large(const size_t size) noexcept
     {
         constexpr size_t header_size = (sizeof(block_header) + CACHE_LINE_SIZE - 1)
-                                      & ~(CACHE_LINE_SIZE - 1);
+                                       & ~(CACHE_LINE_SIZE - 1);
 
         if (size <= PG_SIZE - header_size)
         {
-            void* ptr = MAP_MEMORY(PG_SIZE);
+            void *ptr = MAP_MEMORY(PG_SIZE);
             if (LIKELY(ptr))
             {
-                auto* header = new (ptr) block_header();
+                auto *header = new(ptr) block_header();
                 header->init(size, 255, false);
                 header->set_memory_mapped(true);
-                return static_cast<char*>(ptr) + header_size;
+                return static_cast<char *>(ptr) + header_size;
             }
             return nullptr;
         }
@@ -1121,14 +1120,14 @@ class Jallocator
         const size_t total_pages = (size + header_size + PG_SIZE - 1) >> 12;
         const size_t allocation_size = total_pages << 12;
 
-        void* ptr = MAP_MEMORY(allocation_size);
+        void *ptr = MAP_MEMORY(allocation_size);
         if (UNLIKELY(!ptr))
             return nullptr;
 
         auto* header = new (ptr) block_header();
         header->init(size, 255, false);
         header->set_memory_mapped(true);
-        return static_cast<char*>(ptr) + header_size;
+        return static_cast<char *>(ptr) + header_size;
     }
 
 public:
@@ -1144,13 +1143,13 @@ public:
             if (UNLIKELY(size_class >= TINY_CLASSES))
                 return nullptr;
 
-            if (auto* tiny_pool = tiny_pools_[size_class])
+            if (auto *tiny_pool = tiny_pools_[size_class])
             {
-                if (void* ptr = tiny_pool->allocate_tiny(size_class))
+                if (void *ptr = tiny_pool->allocate_tiny(size_class))
                 {
-                    auto* header = new(ptr) block_header();
+                    auto *header = new(ptr) block_header();
                     header->init(size, size_class, false);
-                    return static_cast<char*>(ptr) + sizeof(block_header);
+                    return static_cast<char *>(ptr) + sizeof(block_header);
                 }
             }
 
@@ -1161,10 +1160,9 @@ public:
                 try
                 {
                     tiny_pools_[size_class] = new(std::align_val_t{PG_SIZE})
-                        tiny_block_manager::tiny_pool();
+                            tiny_block_manager::tiny_pool();
                     return allocate(size);
-                }
-                catch (...)
+                } catch (...)
                 {
                     return nullptr;
                 }
@@ -1178,9 +1176,9 @@ public:
         if (size <= SMALL_LARGE_THRESHOLD)
         {
             const uint8_t size_class = (size - 1) >> 3;
-            if (void* cached = thread_cache_.get(size_class))
+            if (void *cached = thread_cache_.get(size_class))
             {
-                auto* header = reinterpret_cast<block_header*>(static_cast<char*>(cached) - sizeof(block_header));
+                auto *header = reinterpret_cast<block_header *>(static_cast<char *>(cached) - sizeof(block_header));
                 header->set_free(false);
                 return cached;
             }
@@ -1235,11 +1233,11 @@ public:
             {
                 const size_t total_size = header->size() + sizeof(block_header);
                 // Determine if we need one or more pages
-                const size_t allocation_size = total_size <= PG_SIZE ?
-                    PG_SIZE : (total_size + PG_SIZE - 1) & ~(PG_SIZE - 1);
+                const size_t allocation_size = total_size <= PG_SIZE
+                                                   ? PG_SIZE
+                                                   : (total_size + PG_SIZE - 1) & ~(PG_SIZE - 1);
                 UNMAP_MEMORY(block, allocation_size);
-            }
-            else
+            } else
             {
                 free(block);
             }
@@ -1298,7 +1296,7 @@ public:
         const size_t old_size = header->size();
         const uint8_t old_class = header->size_class();
 
-        #if defined(__clang__)
+#if defined(__clang__)
         HAVE_BUILTIN_ASSUME(old_class <= SIZE_CLASSES);
 #endif
 
