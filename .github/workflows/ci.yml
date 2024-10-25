@@ -14,7 +14,7 @@ jobs:
     strategy:
       matrix:
         os: [macos-latest, windows-latest, ubuntu-latest]
-        arch: [x86_64]
+        arch: [x86_64, arm64]
         include:
           - os: macos-latest
             arch: arm64
@@ -57,30 +57,22 @@ jobs:
         with:
           cmake-version: '3.29.0'
 
-      - name: Configure Project (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
+      - name: Configure Project
         run: |
           mkdir -p build
           cd build
-          if [ "${{ matrix.os }}" = "macos-latest" ] && [ "${{ matrix.arch }}" = "arm64" ]; then
+          if [[ "${{ matrix.os }}" == "macos-latest" && "${{ matrix.arch }}" == "arm64" ]]; then
             cmake .. -DCMAKE_BUILD_TYPE=Release \
                     -DCMAKE_CXX_COMPILER=clang++ \
                     -DCMAKE_OSX_ARCHITECTURES=arm64
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            cmake .. -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_CXX_COMPILER=clang++ \
+                    -T ClangCL
           else
             cmake .. -DCMAKE_BUILD_TYPE=Release \
                     -DCMAKE_CXX_COMPILER=clang++
           fi
-
-      - name: Configure Project (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          mkdir build
-          cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release ^
-                  -DCMAKE_CXX_COMPILER=clang++ ^
-                  -T ClangCL
 
       - name: Build
         run: |

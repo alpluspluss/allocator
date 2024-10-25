@@ -10,7 +10,8 @@
 
 If you discover a security vulnerability in our project, please report it promptly. Follow these guidelines for reporting vulnerabilities:
 
-1. **Where to Report**: Please submit your report to the [issue tracker]([link_to_issue_tracker](https://github.com/alpluspluss/jalloc/issues)).
+1. **Where to Report**: Please submit your report to
+   the [issue tracker]([link_to_issue_tracker](https://github.com/alpluspluss/jalloc/issues)).
 
 2. **Information to Include**:
    - A detailed description of the vulnerability

@@ -1,4 +1,5 @@
 #pragma once
+
 #ifndef JALLOCATOR_TESTS_HPP
 #define JALLOCATOR_TESTS_HPP
 
@@ -425,35 +426,7 @@ static void test_pool_management()
     }
 }
 
-static void test_alignment()
-{
-    std::cout << MAGENTA << "Running alignment tests...\n" << RESET;
 
-    for (size_t alignment = 8; alignment <= MAX_ALIGNMENT_TEST; alignment *= 2)
-    {
-        std::vector<void*> ptrs;
-        ptrs.reserve(100);
-
-        for (size_t i = 0; i < 100; ++i)
-        {
-            void* ptr = track_allocation(Jallocator::allocate(alignment));
-            if (!ptr) continue;
-
-            if (reinterpret_cast<uintptr_t>(ptr) % alignment != 0)
-            {
-                std::cout << RED << "Alignment failure: " << ptr
-                         << " not aligned to " << alignment << "\n" << RESET;
-            }
-            ptrs.push_back(ptr);
-        }
-
-        for (auto ptr : ptrs)
-        {
-            Jallocator::deallocate(ptr);
-            track_deallocation(ptr);
-        }
-    }
-}
 
 // Reallocation tests
 static void test_realloc()
@@ -725,9 +698,6 @@ inline void run_all_tests()
 
     std::cout << BLUE << "Running pool management tests..." << RESET << "\n";
     test_pool_management();
-
-    // std::cout << BLUE << "Running alignment tests..." << RESET << "\n";
-    // test_alignment();
 
     std::cout << BLUE << "Running reallocation tests..." << RESET << "\n";
     test_realloc();

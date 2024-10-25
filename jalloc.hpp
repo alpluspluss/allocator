@@ -8,7 +8,7 @@
 // - SIMD-optimized memory operations
 // - Automatic memory coalescing and return-to-OS
 //
-// Version: 0.1.1-unsafe
+// Version: 0.1.2-unsafe
 // Author: alpluspluss
 // Created: 10/22/2024
 // License: MIT
@@ -284,9 +284,11 @@ struct size_class
 
 static constexpr size_t get_alignment_for_size(const size_t size) noexcept
 {
-    return size <= CACHE_LINE_SIZE ? CACHE_LINE_SIZE :
-           size >= PG_SIZE ? PG_SIZE :
-           1ULL << (64 - __builtin_clzll(size - 1));
+    return size <= CACHE_LINE_SIZE
+               ? CACHE_LINE_SIZE
+               : size >= PG_SIZE
+                     ? PG_SIZE
+                     : 1ULL << (64 - __builtin_clzll(size - 1));
 }
 
 constexpr std::array<size_class, 32> size_classes = []
@@ -295,7 +297,7 @@ constexpr std::array<size_class, 32> size_classes = []
     for (size_t i = 0; i < 32; ++i)
     {
         const size_t size = 1ULL << (i + 3);
-        const size_t alignment = get_alignment_for_size(size);  // Use new function
+        const size_t alignment = get_alignment_for_size(size); // Use new function
         const size_t slot = (size + alignment - 1) & ~(alignment - 1);
         classes[i] = {
             static_cast<uint16_t>(size),
@@ -324,9 +326,9 @@ struct thread_cache_t
     alignas(CACHE_LINE_SIZE) size_class_cache caches[SIZE_CLASSES]{};
 
     ALWAYS_INLINE
-    void* get(const uint8_t size_class) noexcept
+    void *get(const uint8_t size_class) noexcept
     {
-        auto&[blocks, count] = caches[size_class];
+        auto &[blocks, count] = caches[size_class];
         if (LIKELY(count > 0))
         {
             PREFETCH_READ(&blocks[count - 2]);
@@ -336,9 +338,9 @@ struct thread_cache_t
     }
 
     ALWAYS_INLINE
-    bool put(void* ptr, const uint8_t size_class) noexcept
+    bool put(void *ptr, const uint8_t size_class) noexcept
     {
-        auto& cache = caches[size_class];
+        auto &cache = caches[size_class];
         if (LIKELY(cache.count < CACHE_SIZE))
         {
             cache.blocks[cache.count].ptr = ptr;
@@ -430,14 +432,14 @@ static void stream_store(void* dst, const T& value) noexcept
 #endif
 
 ALWAYS_INLINE
-static bool is_base_aligned(const void* ptr) noexcept
+static bool is_base_aligned(const void *ptr) noexcept
 {
     return (reinterpret_cast<uintptr_t>(ptr) & (ALIGNMENT - 1)) == 0;
 }
 
 class Jallocator
 {
-    struct bitmap
+      struct bitmap
     {
         static constexpr size_t bits_per_word = 64;
         static constexpr size_t words_per_bitmap = PG_SIZE / (CACHE_LINE_SIZE * 8);
@@ -560,7 +562,7 @@ class Jallocator
         block_header* next_physical;
 
         void init(const size_t sz, const uint8_t size_class, const bool is_free,
-          block_header* prev = nullptr, block_header* next = nullptr) noexcept
+                  block_header *prev = nullptr, block_header *next = nullptr) noexcept
         {
             if (UNLIKELY(sz > (1ULL << 47)))
             {
@@ -637,13 +639,13 @@ class Jallocator
         // 2. Maliciously-aligned pointers
         // 3.
         // Modified alignment check
-        static bool is_aligned(const void* ptr) noexcept
+        static bool is_aligned(const void *ptr) noexcept
         {
             if (!is_base_aligned(ptr))
                 return false;
 
-            const auto header = reinterpret_cast<const block_header*>(
-                static_cast<const char*>(ptr) - sizeof(block_header));
+            const auto header = reinterpret_cast<const block_header *>(
+                static_cast<const char *>(ptr) - sizeof(block_header));
 
             if (!is_base_aligned(header))
                 return false;
@@ -707,7 +709,7 @@ class Jallocator
         uint8_t memory[PG_SIZE - sizeof(bitmap)]{};
 
         ALWAYS_INLINE
-        void* allocate(const size_class& sc) noexcept
+        void *allocate(const size_class &sc) noexcept
         {
             if (const size_t index = bitmap.find_free_block(sc.size);
                 index != ~static_cast<size_t>(0))
@@ -887,7 +889,7 @@ class Jallocator
                 if (const size_t index = bitmap.find_free_block(size);
                     index != ~static_cast<size_t>(0) && index < max_blocks)
                 {
-                    uint8_t* block = memory + index * slot_size;
+                    uint8_t *block = memory + index * slot_size;
                     if (block + slot_size <= memory + (PG_SIZE - sizeof(bitmap)))
                         return block;
                 }
@@ -895,11 +897,11 @@ class Jallocator
             }
 
             ALWAYS_INLINE
-            void deallocate_tiny(void* ptr, const uint8_t size_class) noexcept
+            void deallocate_tiny(void *ptr, const uint8_t size_class) noexcept
             {
                 const size_t size = (size_class + 1) << 3;
                 const size_t slot_size = (size + sizeof(block_header) + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
-                const size_t offset = static_cast<uint8_t*>(ptr) - memory;
+                const size_t offset = static_cast<uint8_t *>(ptr) - memory;
                 const size_t index = offset / slot_size;
 
                 if (index * slot_size < PG_SIZE - sizeof(bitmap))
@@ -995,8 +997,8 @@ class Jallocator
 
     static thread_local thread_cache_t thread_cache_;
     static thread_local pool_manager pool_manager_;
-    static thread_local std::array<tiny_block_manager::tiny_pool*,
-                                 TINY_CLASSES> tiny_pools_;
+    static thread_local std::array<tiny_block_manager::tiny_pool *,
+        TINY_CLASSES> tiny_pools_;
 
     ALWAYS_INLINE
     static void* allocate_tiny(const size_t size) noexcept
@@ -1009,9 +1011,9 @@ class Jallocator
             return nullptr;
 
         // Try allocation
-        if (auto* tiny_pool = tiny_pools_[size_class])
+        if (auto *tiny_pool = tiny_pools_[size_class])
         {
-            void* ptr = nullptr;
+            void *ptr = nullptr;
             ptr = tiny_pool->allocate_tiny(size_class);
 
             if (LIKELY(ptr != nullptr))
@@ -1019,10 +1021,10 @@ class Jallocator
                 if (UNLIKELY(!is_base_aligned(ptr)))
                     return nullptr;
 
-                auto* header = new (ptr) block_header();
+                auto *header = new(ptr) block_header();
                 header->init(size, size_class, false);
 
-                void* user_ptr = static_cast<char*>(ptr) + sizeof(block_header);
+                void *user_ptr = static_cast<char *>(ptr) + sizeof(block_header);
                 if (UNLIKELY(!is_base_aligned(user_ptr)))
                     return nullptr;
 
@@ -1037,11 +1039,10 @@ class Jallocator
         {
             try
             {
-                tiny_pools_[size_class] = new (std::align_val_t{PG_SIZE})
-                    tiny_block_manager::tiny_pool();
+                tiny_pools_[size_class] = new(std::align_val_t{PG_SIZE})
+                        tiny_block_manager::tiny_pool();
                 return allocate_tiny(size);
-            }
-            catch (...)
+            } catch (...)
             {
                 return nullptr;
             }
@@ -1098,30 +1099,36 @@ class Jallocator
 
         return nullptr;
     }
-
     ALWAYS_INLINE
     static void* allocate_large(const size_t size) noexcept
     {
-        const size_t alignment = get_alignment_for_size(size);
-        const size_t total_size = size + sizeof(block_header);
-        const size_t power2_size = 1ULL << (64 - __builtin_clzll(total_size - 1));
-        const size_t aligned_size = power2_size >= alignment ? power2_size : alignment;
+        constexpr size_t header_size = (sizeof(block_header) + CACHE_LINE_SIZE - 1)
+                                      & ~(CACHE_LINE_SIZE - 1);
 
-
-        void* ptr = MAP_MEMORY(aligned_size);
-        if (UNLIKELY(!ptr))
-            return nullptr;
-
-        if (UNLIKELY(reinterpret_cast<uintptr_t>(ptr) % alignment != 0))
+        if (size <= PG_SIZE - header_size)
         {
-            UNMAP_MEMORY(ptr, aligned_size);
+            void* ptr = MAP_MEMORY(PG_SIZE);
+            if (LIKELY(ptr))
+            {
+                auto* header = new (ptr) block_header();
+                header->init(size, 255, false);
+                header->set_memory_mapped(true);
+                return static_cast<char*>(ptr) + header_size;
+            }
             return nullptr;
         }
 
+        const size_t total_pages = (size + header_size + PG_SIZE - 1) >> 12;
+        const size_t allocation_size = total_pages << 12;
+
+        void* ptr = MAP_MEMORY(allocation_size);
+        if (UNLIKELY(!ptr))
+            return nullptr;
+
         auto* header = new (ptr) block_header();
-        header->encode(size, 255, false);
+        header->init(size, 255, false);
         header->set_memory_mapped(true);
-        return static_cast<char*>(ptr) + sizeof(block_header);
+        return static_cast<char*>(ptr) + header_size;
     }
 
 public:
@@ -1132,18 +1139,56 @@ public:
             return nullptr;
 
         if (LIKELY(size <= TINY_LARGE_THRESHOLD))
-            return allocate_tiny(size);
-
-        if (size <= SMALL_LARGE_THRESHOLD)
-            return allocate_small(size);
-
-        if (size < LARGE_THRESHOLD)
         {
-            const size_t size_class = 31 - __builtin_clz(size - 1);
-            return allocate_medium(size, size_class);
+            const uint8_t size_class = (size - 1) >> 3;
+            if (UNLIKELY(size_class >= TINY_CLASSES))
+                return nullptr;
+
+            if (auto* tiny_pool = tiny_pools_[size_class])
+            {
+                if (void* ptr = tiny_pool->allocate_tiny(size_class))
+                {
+                    auto* header = new(ptr) block_header();
+                    header->init(size, size_class, false);
+                    return static_cast<char*>(ptr) + sizeof(block_header);
+                }
+            }
+
+            static std::mutex init_mutex;
+            std::lock_guard lock(init_mutex);
+            if (!tiny_pools_[size_class])
+            {
+                try
+                {
+                    tiny_pools_[size_class] = new(std::align_val_t{PG_SIZE})
+                        tiny_block_manager::tiny_pool();
+                    return allocate(size);
+                }
+                catch (...)
+                {
+                    return nullptr;
+                }
+            }
+            return nullptr;
         }
 
-        return allocate_large(size);
+        if (LIKELY(size >= PG_SIZE))
+            return allocate_large(size);
+
+        if (size <= SMALL_LARGE_THRESHOLD)
+        {
+            const uint8_t size_class = (size - 1) >> 3;
+            if (void* cached = thread_cache_.get(size_class))
+            {
+                auto* header = reinterpret_cast<block_header*>(static_cast<char*>(cached) - sizeof(block_header));
+                header->set_free(false);
+                return cached;
+            }
+            return allocate_small(size);
+        }
+
+        const size_t size_class = 31 - __builtin_clz(size - 1);
+        return allocate_medium(size, size_class);
     }
 
     ALWAYS_INLINE
@@ -1189,8 +1234,10 @@ public:
             if (header->is_memory_mapped())
             {
                 const size_t total_size = header->size() + sizeof(block_header);
-                const size_t aligned_size = total_size + PG_SIZE - 1 & ~(PG_SIZE - 1);
-                UNMAP_MEMORY(block, aligned_size);
+                // Determine if we need one or more pages
+                const size_t allocation_size = total_size <= PG_SIZE ?
+                    PG_SIZE : (total_size + PG_SIZE - 1) & ~(PG_SIZE - 1);
+                UNMAP_MEMORY(block, allocation_size);
             }
             else
             {
@@ -1252,8 +1299,8 @@ public:
         const uint8_t old_class = header->size_class();
 
         #if defined(__clang__)
-            HAVE_BUILTIN_ASSUME(old_class <= SIZE_CLASSES);
-        #endif
+        HAVE_BUILTIN_ASSUME(old_class <= SIZE_CLASSES);
+#endif
 
         if (old_class < TINY_CLASSES)
         {
@@ -1510,8 +1557,8 @@ public:
 // Initialization
 thread_local thread_cache_t Jallocator::thread_cache_{};
 thread_local Jallocator::pool_manager Jallocator::pool_manager_{};
-thread_local std::array<Jallocator::tiny_block_manager::tiny_pool*,
-                        TINY_CLASSES>
+thread_local std::array<Jallocator::tiny_block_manager::tiny_pool *,
+    TINY_CLASSES>
     Jallocator::tiny_pools_{};
 
 // C API
@@ -1552,3 +1599,23 @@ thread_local std::array<Jallocator::tiny_block_manager::tiny_pool*,
     }
 }
 #endif
+
+// inline void* operator new(size_t __sz)
+// {
+//     return Jallocator::allocate(__sz);
+// }
+//
+// inline void* operator new[](size_t __sz)
+// {
+//     return Jallocator::allocate(__sz);
+// }
+//
+// inline void operator delete(void* __p) noexcept
+// {
+//     Jallocator::deallocate(__p);
+// }
+//
+// inline void operator delete[](void* __p) noexcept
+// {
+//     Jallocator::deallocate(__p);
+// }

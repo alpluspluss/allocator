@@ -83,11 +83,15 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     endif()
 endif()
 
-add_library(jalloc INTERFACE)
+add_library(jalloc INTERFACE
+        extern/catch_amalgamated.cpp
+        jalloc.hpp)
 target_include_directories(jalloc INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(jalloc INTERFACE cxx_std_17)
 
-add_executable(jalloc_tests tests/main.cpp)
+add_executable(jalloc_tests tests/main.cpp
+        extern/catch_amalgamated.cpp
+        jalloc.hpp)
 target_link_libraries(jalloc_tests PRIVATE jalloc)
 target_compile_features(jalloc_tests PRIVATE cxx_std_17)
 
