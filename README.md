@@ -73,7 +73,7 @@ Large blocks: [Header(8B)][Data(>256B)]
 - Bitmap-based block management minimizes overhead.
 - Three-tiered allocation strategy optimizes for small, medium, and large allocations.
 
-See the [bechmarks](benches/benchmark.md) for performance data.
+See the [benchmarks](benches/benchmark.md) for performance data.
 
 ## Current State
 Currently, the allocator is in the development phase. It is not recommended for production use as some platform-specific

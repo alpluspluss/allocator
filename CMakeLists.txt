@@ -97,11 +97,6 @@ add_test(
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
-set_tests_properties(jalloc_unit_tests PROPERTIES
-        TIMEOUT 30
-        WILL_FAIL FALSE
-)
-
 set_tests_properties(jalloc_unit_tests PROPERTIES LABELS "unit")
 
 set(CTEST_OUTPUT_ON_FAILURE ON)

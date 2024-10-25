@@ -4,7 +4,7 @@
 
 Benched against the standard `malloc()` function.
 
-### aarch64 macOS
+### aarch64 macOS [OUTDATED]
 
 Benched with Apple Silicon M1 chip. -O3 optimization level and specialized flags.
 
