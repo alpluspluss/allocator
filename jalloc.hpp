@@ -6,12 +6,17 @@
 // - Thread-safe & high-performance memory allocation
 // - Multi-tiered allocation strategy for different sizes
 // - SIMD-optimized memory operations
-// - Automatic memory coalescing and return-to-OS
+// - Automatic memory coalescing and return-to-OS policies
 //
-// Version: 0.1.2
+// Version: 1.0.0
 // Author: alpluspluss
+// Updated: 10/28/2024
 // Created: 10/22/2024
 // License: MIT
+//
+// This project is no longer maintained. Please feel free to fork and modify it.
+// FYI: This allocator works best with small to medium-sized allocations (>= 4KB).
+//
 
 #pragma once
 
