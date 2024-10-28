@@ -9,6 +9,15 @@ include(CheckCXXCompilerFlag)
 include(CTest)
 enable_testing()
 
+# Define options for sanitizers
+option(ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+
+# Check if both sanitizers are enabled simultaneously and error out if so
+if (ENABLE_TSAN AND ENABLE_ASAN)
+    message(FATAL_ERROR "ENABLE_TSAN and ENABLE_ASAN cannot be enabled at the same time.")
+endif ()
+
 function(add_compiler_flag flag)
     check_cxx_compiler_flag(${flag} FLAG_${flag})
     if(FLAG_${flag})
@@ -72,27 +81,33 @@ elseif(WIN32)
     ")
 endif()
 
+# Enable selected sanitizer
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} \
-        -g3 \
-        -fno-omit-frame-pointer \
-        -fsanitize=address,undefined \
-    ")
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g3 -fno-omit-frame-pointer")
+
+    if (ENABLE_TSAN)
+        message(STATUS "Enabling ThreadSanitizer")
+        add_compile_options(-fsanitize=thread)
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=thread")
+    elseif (ENABLE_ASAN)
+        message(STATUS "Enabling AddressSanitizer and UndefinedBehaviorSanitizer")
+        add_compile_options(-fsanitize=address,undefined)
         set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined")
     endif()
 endif()
 
+# Create interface library for jalloc
 add_library(jalloc INTERFACE
         jalloc.hpp)
 target_include_directories(jalloc INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(jalloc INTERFACE cxx_std_17)
 
-add_executable(jalloc_tests tests/main.cpp
-        jalloc.hpp)
+# Create executable for tests
+add_executable(jalloc_tests tests/main.cpp jalloc.hpp)
 target_link_libraries(jalloc_tests PRIVATE jalloc c++ c++abi)
 target_compile_features(jalloc_tests PRIVATE cxx_std_17)
 
+# Add tests
 add_test(
         NAME jalloc_unit_tests
         COMMAND jalloc_tests
@@ -102,4 +117,4 @@ add_test(
 set_tests_properties(jalloc_unit_tests PROPERTIES LABELS "unit")
 
 set(CTEST_OUTPUT_ON_FAILURE ON)
-set(CTEST_TEST_TIMEOUT 120)
+set(CTEST_TEST_TIMEOUT 300)

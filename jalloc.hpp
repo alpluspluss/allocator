@@ -178,24 +178,15 @@
         #define HAVE_BUILTIN_ASSUME_ALIGNED(x, a) __builtin_assume_aligned(x, a)
         #define NO_SANITIZE_ADDRESS __attribute__((no_sanitize("address")))
         #define VECTORIZE_LOOP _Pragma("clang loop vectorize(enable) interleave(enable)")
-    #else
+#define UNROLL_LOOP _Pragma("clang loop unroll(full)")
+#else
         // GCC-specific fallbacks
         #define HAVE_BUILTIN_ASSUME(x) ((void)0)
         #define HAVE_BUILTIN_ASSUME_ALIGNED(x, a) (x)
         #define NO_SANITIZE_ADDRESS
         #define VECTORIZE_LOOP _Pragma("GCC ivdep")
-    #endif
-#elif defined(_MSC_VER)
-    // MSVC specific optimizations
-    #define LIKELY(x) (x)
-    #define UNLIKELY(x) (x)
-    #define ALWAYS_INLINE __forceinline
-    #define ALIGN_TO(x) __declspec(align(x))
-    #define HAVE_BUILTIN_ASSUME(x) __assume(x)
-    #define HAVE_BUILTIN_ASSUME_ALIGNED(x, a) (x)
-    #define NO_SANITIZE_ADDRESS
-    #define VECTORIZE_LOOP
-    #define CUSTOM_PREFETCH(addr) ((void)0)
+        #define UNROLL_LOOP _Pragma("GCC unroll 8")
+#endif
 #else
     // Generic fallbacks for other compilers
     #define LIKELY(x) (x)
@@ -249,7 +240,7 @@
 
 // Allocator constants
 // Hardware constants
-static constexpr size_t CACHE_LINE_SIZE = 64;
+static constexpr size_t CACHE_LINE_SIZE = 64; //Changable to 32 | 64
 static constexpr size_t PG_SIZE = 4096;
 
 // Block header
@@ -257,6 +248,11 @@ static constexpr size_t TINY_LARGE_THRESHOLD = 64;
 static constexpr size_t SMALL_LARGE_THRESHOLD = 256;
 static constexpr size_t ALIGNMENT = CACHE_LINE_SIZE;
 static constexpr size_t LARGE_THRESHOLD = 1024 * 1024;
+static constexpr size_t MAX_CACHED_BLOCKS = 32;
+static constexpr size_t MAX_CACHE_SIZE = 64 * 1024 * 1024;
+static constexpr size_t MIN_CACHE_BLOCK = 4 * 1024;
+static constexpr size_t MAX_CACHE_BLOCK = 16 * 1024 * 1024;
+static constexpr auto MAX_SIZE_RATIO = 1.25;
 
 static constexpr size_t CACHE_SIZE = 32;
 static constexpr size_t SIZE_CLASSES = 32;
@@ -496,6 +492,7 @@ class Jallocator
                 }
             #endif
 
+            VECTORIZE_LOOP
             for (size_t i = 0; i < words_per_bitmap; ++i)
             {
                 if ((i & align_mask) != 0)
@@ -589,16 +586,13 @@ class Jallocator
         ALWAYS_INLINE
         bool is_valid() const noexcept
         {
-            if (UNLIKELY(magic != HEADER_MAGIC))
-                return false;
-            if (UNLIKELY((data & MAGIC_MASK) != MAGIC_VALUE))
-                return false;
-            if (UNLIKELY(size() > (1ULL << 47)))
-                return false;
-
-            if (UNLIKELY(size_class() >= SIZE_CLASSES && size_class() != 255))
-                return false;
-            return true;
+            if (LIKELY(magic == HEADER_MAGIC &&
+                (data & MAGIC_MASK) == MAGIC_VALUE))
+            {
+                return size() <= (1ULL << 47) &&
+                       (size_class() < SIZE_CLASSES || size_class() == 255);
+            }
+            return false;
         }
 
         ALWAYS_INLINE
@@ -994,8 +988,288 @@ class Jallocator
         }
     };
 
+    struct alignas(CACHE_LINE_SIZE) large_block_cache_t
+    {
+        struct alignas(CACHE_LINE_SIZE) cache_entry
+        {
+            std::atomic<void *> ptr{nullptr};
+            size_t size{0};
+            uint64_t last_use{0};
+        };
+
+        struct alignas(CACHE_LINE_SIZE) size_bucket
+        {
+            static constexpr size_t BUCKET_SIZE = 4;
+            std::atomic<size_t> count{0};
+            cache_entry entries[BUCKET_SIZE];
+        };
+
+        static constexpr size_t NUM_BUCKETS = 8; // 4KB to 512KB
+        alignas(CACHE_LINE_SIZE) size_bucket buckets[NUM_BUCKETS];
+        alignas(CACHE_LINE_SIZE) std::atomic<size_t> total_cached{0};
+
+        ALWAYS_INLINE
+        static uint64_t get_timestamp() noexcept
+        {
+#if defined(__x86_64__)
+#if defined(_MSC_VER)
+                    return __rdtsc();
+#else
+                    unsigned int aux;
+                    return __rdtscp(&aux);
+#endif
+#elif defined(__aarch64__)
+            // Use CNTVCT_EL0 (Virtual Count Register) for ARM64
+            uint64_t timestamp;
+#if defined(_MSC_VER)
+                    timestamp = _ReadStatusReg(ARM64_CNTVCT_EL0);
+#else
+            asm volatile("mrs %0, cntvct_el0" : "=r"(timestamp));
+#endif
+            return timestamp;
+#else
+                // Fallback for other architectures
+                return std::chrono::steady_clock::now().time_since_epoch().count();
+#endif
+        }
+
+        ALWAYS_INLINE
+        static void memory_fence() noexcept
+        {
+#if defined(__x86_64__)
+                _mm_mfence();
+#elif defined(__aarch64__)
+            __asm__ volatile("dmb sy" ::: "memory");
+#else
+                std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
+        }
+
+        ALWAYS_INLINE
+        static void prefetch(const void *ptr) noexcept
+        {
+#if defined(__x86_64__)
+                _mm_prefetch(static_cast<const char*>(ptr), _MM_HINT_T0);
+#elif defined(__aarch64__)
+            PREFETCH_READ(ptr); // Read, high temporal locality
+#endif
+        }
+
+        ALWAYS_INLINE
+        static size_t get_bucket_index(size_t size) noexcept
+        {
+#if defined(__x86_64__)
+                return (63 - __builtin_clzll(size > MIN_CACHE_BLOCK ? size - 1 : MIN_CACHE_BLOCK)) - 11;
+#elif defined(__aarch64__)
+            return (63 - __builtin_clzll(size > MIN_CACHE_BLOCK ? size - 1 : MIN_CACHE_BLOCK)) - 11;
+#else
+                size_t index = 0;
+                size_t threshold = MIN_CACHE_BLOCK;
+                while (threshold < size && index < NUM_BUCKETS - 1)
+                {
+                    threshold <<= 1;
+                    ++index;
+                }
+                return index;
+#endif
+        }
+
+        ALWAYS_INLINE
+        void *get_cached_block(size_t size) noexcept
+        {
+            if (UNLIKELY(size < MIN_CACHE_BLOCK || size > MAX_CACHE_BLOCK))
+                return nullptr;
+
+            const size_t bucket_idx = get_bucket_index(size);
+            if (UNLIKELY(bucket_idx >= NUM_BUCKETS))
+                return nullptr;
+
+            auto &bucket = buckets[bucket_idx];
+            const size_t count = bucket.count.load(std::memory_order_acquire);
+
+            // Prefetch the bucket entries
+#if defined(__x86_64__) || defined(__aarch64__)
+            prefetch(&bucket.entries[0]);
+            if (count > 1) prefetch(&bucket.entries[1]);
+#endif
+
+            for (size_t i = 0; i < count; ++i)
+            {
+                auto &entry = bucket.entries[i];
+                void *expected = entry.ptr.load(std::memory_order_relaxed);
+
+                if (expected && entry.size >= size && entry.size <= size * MAX_SIZE_RATIO)
+                {
+                    if (entry.ptr.compare_exchange_strong(expected, nullptr,
+                                                          std::memory_order_acquire, std::memory_order_relaxed))
+                    {
+                        bucket.count.fetch_sub(1, std::memory_order_release);
+                        total_cached.fetch_sub(entry.size, std::memory_order_relaxed);
+                        memory_fence();
+                        return expected;
+                    }
+                }
+            }
+            return nullptr;
+        }
+
+        ALWAYS_INLINE bool cache_block(void *ptr, size_t size) noexcept
+        {
+            if (UNLIKELY(size < MIN_CACHE_BLOCK || size > MAX_CACHE_BLOCK))
+                return false;
+
+            const size_t bucket_idx = get_bucket_index(size);
+            if (UNLIKELY(bucket_idx >= NUM_BUCKETS))
+                return false;
+
+            if (const size_t current_total = total_cached.load(std::memory_order_relaxed);
+                current_total + size > MAX_CACHE_SIZE)
+                return false;
+
+            auto &[count2, entries] = buckets[bucket_idx];
+
+            if (const size_t count = count2.load(std::memory_order_acquire); count < size_bucket::BUCKET_SIZE)
+            {
+                auto &entry = entries[count];
+
+                if (void *expected = nullptr; entry.ptr.compare_exchange_strong(expected, ptr,
+                    std::memory_order_release, std::memory_order_relaxed))
+                {
+                    entry.size = size;
+                    entry.last_use = get_timestamp();
+                    count2.fetch_add(1, std::memory_order_release);
+                    total_cached.fetch_add(size, std::memory_order_relaxed);
+                    return true;
+                }
+            }
+
+            // ReSharper disable once CppDFAUnreadVariable
+            auto oldest_time = UINT64_MAX;
+            size_t oldest_idx = 0;
+
+#if defined(__x86_64__) || defined(__aarch64__)
+#if defined(__x86_64__) && defined(__AVX2__)
+                    __m256i oldest = _mm256_set1_epi64x(UINT64_MAX);
+                    __m256i indices = _mm256_setr_epi64x(0, 1, 2, 3);
+
+                    for (size_t i = 0; i < BUCKET_SIZE; i += 4)
+                    {
+                        __m256i times = _mm256_setr_epi64x(
+                            bucket.entries[i].last_use,
+                            bucket.entries[i+1].last_use,
+                            bucket.entries[i+2].last_use,
+                            bucket.entries[i+3].last_use
+                        );
+                        __m256i mask = _mm256_cmpgt_epi64(oldest, times);
+                        oldest = _mm256_blendv_epi8(oldest, times, mask);
+                        indices = _mm256_blendv_epi8(indices,
+                                 _mm256_setr_epi64x(i, i+1, i+2, i+3), mask);
+                    }
+
+                    uint64_t tmp_times[4], tmp_indices[4];
+                    _mm256_storeu_si256((__m256i*)tmp_times, oldest);
+                    _mm256_storeu_si256((__m256i*)tmp_indices, indices);
+
+                    for (int i = 0; i < 4; i++)
+                    {
+                        if (tmp_times[i] < oldest_time)
+                        {
+                            oldest_time = tmp_times[i];
+                            oldest_idx = tmp_indices[i];
+                        }
+                    }
+#elif defined(__aarch64__)
+            uint64x2_t oldest = vdupq_n_u64(UINT64_MAX);
+            uint64x2_t idx = vdupq_n_u64(0);
+            idx = vsetq_lane_u64(0, idx, 0);
+
+            VECTORIZE_LOOP
+            for (size_t i = 0; i < size_bucket::BUCKET_SIZE; i += 2)
+            {
+                uint64x2_t times = vld1q_u64(&entries[i].last_use);
+                uint64x2_t curr_idx = vdupq_n_u64(0);
+                curr_idx = vsetq_lane_u64(i, curr_idx, 0);
+                uint64x2_t mask = vcltq_u64(times, oldest);
+                oldest = vbslq_u64(mask, times, oldest);
+                idx = vbslq_u64(mask, curr_idx, idx);
+            }
+
+            uint64_t tmp_times[2], tmp_indices[2];
+            vst1q_u64(tmp_times, oldest);
+            vst1q_u64(tmp_indices, idx);
+
+            if (tmp_times[0] < tmp_times[1])
+            {
+                // ReSharper disable once CppDFAUnusedValue
+                oldest_time = tmp_times[0];
+                oldest_idx = tmp_indices[0];
+            } else
+            {
+                // ReSharper disable once CppDFAUnusedValue
+                oldest_time = tmp_times[1];
+                oldest_idx = tmp_indices[1];
+            }
+#endif
+#else
+                VECTORIZE_LOOP
+                for (size_t i = 0; i < BUCKET_SIZE; ++i)
+                {
+                    if (bucket.entries[i].last_use < oldest_time)
+                    {
+                        oldest_time = bucket.entries[i].last_use;
+                        oldest_idx = i;
+                    }
+                }
+#endif
+
+            auto &oldest2 = entries[oldest_idx];
+            void *expected = oldest2.ptr.load(std::memory_order_relaxed);
+
+            if (expected && size <= oldest2.size * MAX_SIZE_RATIO)
+            {
+                if (oldest2.ptr.compare_exchange_strong(expected, ptr,
+                                                        std::memory_order_release, std::memory_order_relaxed))
+                {
+                    total_cached.fetch_sub(oldest2.size, std::memory_order_relaxed);
+                    oldest2.size = size;
+                    oldest2.last_use = get_timestamp();
+                    total_cached.fetch_add(size, std::memory_order_relaxed);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        ALWAYS_INLINE
+        void clear() noexcept
+        {
+            for (auto &bucket: buckets)
+            {
+                const size_t count = bucket.count.load(std::memory_order_acquire);
+                for (size_t i = 0; i < count; ++i)
+                {
+                    auto &[ptr1, size, last_use] = bucket.entries[i];
+                    if (void *ptr = ptr1.exchange(nullptr, std::memory_order_release))
+                    {
+                        const size_t total_size = size + sizeof(block_header);
+                        const size_t alloc_size = total_size <= PG_SIZE
+                                                      ? PG_SIZE
+                                                      : (total_size + PG_SIZE - 1) & ~(PG_SIZE - 1);
+
+                        UNMAP_MEMORY(static_cast<char*>(ptr) - sizeof(block_header),
+                                     alloc_size);
+                    }
+                }
+                bucket.count.store(0, std::memory_order_release);
+            }
+            total_cached.store(0, std::memory_order_release);
+        }
+    };
+
     static thread_local thread_cache_t thread_cache_;
     static thread_local pool_manager pool_manager_;
+    static thread_local large_block_cache_t large_block_cache_;
     static thread_local std::array<tiny_block_manager::tiny_pool *,
         TINY_CLASSES> tiny_pools_;
 
@@ -1009,7 +1283,6 @@ class Jallocator
         if (UNLIKELY(size_class >= TINY_CLASSES))
             return nullptr;
 
-        // Try allocation
         if (auto *tiny_pool = tiny_pools_[size_class])
         {
             void *ptr = nullptr;
@@ -1101,6 +1374,14 @@ class Jallocator
     ALWAYS_INLINE
     static void* allocate_large(const size_t size) noexcept
     {
+        if (void* cached = large_block_cache_.get_cached_block(size))
+        {
+            auto* header = reinterpret_cast<block_header*>(
+                static_cast<char*>(cached) - sizeof(block_header));
+            header->set_free(false);
+            return cached;
+        }
+
         constexpr size_t header_size = (sizeof(block_header) + CACHE_LINE_SIZE - 1)
                                        & ~(CACHE_LINE_SIZE - 1);
 
@@ -1136,8 +1417,8 @@ class Jallocator
         cleanup();
     }
 
-    ALWAYS_INLINE static void
-    register_thread_cleanup()
+    ALWAYS_INLINE
+    static void register_thread_cleanup()
     {
         thread_local struct Cleanup
         {
@@ -1247,6 +1528,8 @@ public:
 
         if (UNLIKELY(size_class == 255))
         {
+            if (large_block_cache_.cache_block(ptr, header->size()))
+                return;
             void* block = static_cast<char*>(ptr) - sizeof(block_header);
             if (header->is_memory_mapped())
             {
@@ -1562,6 +1845,7 @@ public:
     ALWAYS_INLINE
     static void cleanup() noexcept
     {
+        large_block_cache_.clear();
         thread_cache_.clear();
 
         for (auto*& pool : tiny_pools_)
@@ -1578,9 +1862,10 @@ public:
 // Initialization
 thread_local thread_cache_t Jallocator::thread_cache_{};
 thread_local Jallocator::pool_manager Jallocator::pool_manager_{};
+thread_local Jallocator::large_block_cache_t Jallocator::large_block_cache_{};
 thread_local std::array<Jallocator::tiny_block_manager::tiny_pool *,
     TINY_CLASSES>
-    Jallocator::tiny_pools_{};
+Jallocator::tiny_pools_{};
 
 // C API
 #ifndef __cplusplus

@@ -1,3 +1,8 @@
+# Archived Status
+
+This project is archived and no longer maintained. It is kept here for historical purposes only.
+However, feel free to fork and continue development on your own.
+
 # Just an Allocator™
 It allocates memory... efficiently™
 
@@ -46,22 +51,7 @@ int main()
 | Linux    | ARM64                 | Not tested |
 | Windows  | x86_64                | Not tested |
 
-### Note: GNU and Clang will be only supported compilers.
-
-## Technical Details
-For those who insist on knowing more:
-
-### Memory Layout
-```
-Tiny blocks:  [Header(8B)][Data(≤64B)]
-Small blocks: [Header(8B)][Data(≤256B)]
-Large blocks: [Header(8B)][Data(>256B)]
-```
-
-### Thread Safety
-- Thread-local caches
-- Atomic operations
-- Lock-free fast paths
+### Note: GNU and Clang will be the only supported compilers.
 
 ## Requirements
 - C++17 or later
