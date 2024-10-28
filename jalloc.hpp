@@ -8,7 +8,7 @@
 // - SIMD-optimized memory operations
 // - Automatic memory coalescing and return-to-OS
 //
-// Version: 0.1.2-unsafe
+// Version: 0.1.2
 // Author: alpluspluss
 // Created: 10/22/2024
 // License: MIT
@@ -223,11 +223,10 @@
     #define ALIGNED_ALLOC(alignment, size) _aligned_malloc(size, alignment)
     #define ALIGNED_FREE(ptr) _aligned_free(ptr)
 #elif defined(__APPLE__)
-    // macOS memory management
     #include <mach/mach.h>
 #include <sys/mman.h>
 
-    #define MAP_MEMORY(size) \
+#define MAP_MEMORY(size) \
         mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
     #define UNMAP_MEMORY(ptr, size) munmap(ptr, size)
     #define ALIGNED_ALLOC(alignment, size) aligned_alloc(alignment, size)
@@ -238,6 +237,7 @@
     #include <sched.h>
     #include <unistd.h>
     #include <sys/mman.h>
+    #include <thread>
 
     #define MAP_MEMORY(size) \
         mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)
@@ -1130,10 +1130,29 @@ class Jallocator
         return static_cast<char *>(ptr) + header_size;
     }
 
+    ALWAYS_INLINE
+    static void thread_cleanup()
+    {
+        cleanup();
+    }
+
+    ALWAYS_INLINE static void
+    register_thread_cleanup()
+    {
+        thread_local struct Cleanup
+        {
+            ~Cleanup()
+            {
+                cleanup();
+            }
+        } cleanup;
+    }
+
 public:
     ALWAYS_INLINE
     static void* allocate(const size_t size) noexcept
     {
+        register_thread_cleanup();
         if (UNLIKELY(size == 0 || size > (1ULL << 47)))
             return nullptr;
 
@@ -1544,10 +1563,14 @@ public:
     static void cleanup() noexcept
     {
         thread_cache_.clear();
+
         for (auto*& pool : tiny_pools_)
         {
-            delete pool;
-            pool = nullptr;
+            if (pool)
+            {
+                operator delete(pool, std::align_val_t{PG_SIZE});
+                pool = nullptr;
+            }
         }
     }
 };
